@@ -39,7 +39,7 @@ Topics: networking, identity, observability, infrastructure, ingress, storage, o
 
 ## Repository Knowledge Map
 
-- **Design Decisions**: `design-decisions/` — 26 architectural decisions with rationale and trade-offs
+- **Design Decisions**: `design-decisions/` — architectural decisions with rationale and trade-offs
 - **Implementation Plans**: `implementation-plans/` — active feature implementation plans
 - **Architecture**: `experiments/arch/` — L1 Context, L2 Container, L3 Component decomposition
 - **Studies**: `studies/` — deep-dive analysis (e.g., WIF SA key management)
