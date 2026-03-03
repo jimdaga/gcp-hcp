@@ -305,7 +305,7 @@ type GCPPlatformSpec struct {
     // workloadIdentity configures Workload Identity Federation
     // +required
     // +immutable
-    WorkloadIdentity GCPWorkloadIdentityConfig `json:"workloadIdentity,omitzero"`
+    WorkloadIdentity GCPWorkloadIdentityConfig `json:"workloadIdentity,omitempty"`
 }
 
 type GCPWorkloadIdentityConfig struct {
@@ -319,7 +319,7 @@ type GCPWorkloadIdentityConfig struct {
     ProviderID string `json:"providerID,omitempty"`
 
     // serviceAccountsEmails contains Google Service Account emails
-    ServiceAccountsEmails GCPServiceAccountsEmails `json:"serviceAccountsEmails,omitzero"`
+    ServiceAccountsEmails GCPServiceAccountsEmails `json:"serviceAccountsEmails,omitempty"`
 }
 
 type GCPServiceAccountsEmails struct {

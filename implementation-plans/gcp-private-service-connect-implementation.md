@@ -278,7 +278,7 @@ Customer Side (control-plane-operator):
 - Watch GCPPrivateServiceConnect CRDs in control plane namespace
 - Create PSC Endpoint in customer VPC
 - Create DNS zone and records in customer project
-- Update status.EndpointIP, status.DNSRecords
+- Update status.EndpointIP, status.DNSZones
 
 ### Status Propagation and Monitoring
 

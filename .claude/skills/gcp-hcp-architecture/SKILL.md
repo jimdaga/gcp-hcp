@@ -6,7 +6,7 @@ description: >
   ArgoCD, infrastructure), gcp-hcp-cli, cls-backend, cls-controller, or when creating
   or reviewing design decisions, or needing architectural context for GCP Hosted Control
   Planes on GKE. Accepts optional topic filter: networking, identity, observability,
-  infrastructure, ingress, storage, operators, testing, automation, naming, incidents, slo.
+  infrastructure, ingress, storage, operators, testing, automation, naming, dns, fleet, incidents, slo.
 ---
 
 # GCP HCP Architecture Context
@@ -21,7 +21,7 @@ Provides architectural context, design decisions, and implementation plans for G
 - Reviewing PRs that touch GCP infrastructure or control plane components
 - Writing implementation plans for GCP HCP features
 
-**Manual invocation:** `/gcp-hcp:architecture [topic]`
+**Manual invocation:** `/gcp-hcp-architecture [topic]`
 
 ## Topic Index
 
