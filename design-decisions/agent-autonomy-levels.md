@@ -8,7 +8,7 @@
 
 Adopt a three-stage approach for agent-driven remediation, with increasing autonomy and decreasing human involvement:
 
-1. **Read-only diagnosis agent** (current + hardening) — triggered by users or alerts, no destructive access, no customer data access
+1. **Read-only diagnosis agent** (current) — triggered by users or alerts, no destructive access, no customer data access
 2. **Interactive recovery sessions** — conversational agent proposes destructive actions, CLI executes under the user's own PAM-granted identity
 3. **Predefined automated remediation** — alert-triggered, dedicated SA executes well-known recovery procedures encoded in workflows, potentially out of PAM
 
@@ -22,7 +22,6 @@ Each stage can be implemented incrementally. All three coexist in production.
   - PAM (Privileged Access Manager) gates destructive workflows for human operators via IAM conditions + time-bounded grants with approval
   - PAM grants are per-principal and time-bounded (min 30 min). No single-use grants, no concurrency limits
   - Cloud Run cannot impersonate its caller — the service runs as its own SA, making per-user workflow execution impossible from the server side
-  - The `workflows-executor` SA currently has **unconditional** `roles/workflows.invoker`, bypassing PAM gates (must be fixed)
   - Data sovereignty: production cluster data must stay within GCP (Vertex AI)
   - Prompt injection is a real threat when an LLM processes untrusted data (K8s logs, events, resource annotations) and has access to destructive tools
 
@@ -33,7 +32,7 @@ Each stage can be implemented incrementally. All three coexist in production.
 
 ## Alternatives Considered
 
-1. **Incremental three-stage strategy (chosen)**: Match autonomy levels to trust levels. Stage 1 hardens the existing read-only agent. Stage 2 adds interactive recovery where the agent proposes and the CLI executes under user identity. Stage 3 adds automated remediation for well-known procedures via dedicated workflows. All three coexist.
+1. **Incremental three-stage strategy (chosen)**: Match autonomy levels to trust levels. Stage 1 is the existing read-only agent. Stage 2 adds interactive recovery where the agent proposes and the CLI executes under user identity. Stage 3 adds automated remediation for well-known procedures via dedicated workflows. All three coexist.
 
 2. **Agent-side PAM (agent SA requests PAM grants)**: The agent's shared SA requests PAM grants to execute destructive workflows server-side. Simpler architecture — no CLI changes needed.
 
@@ -45,7 +44,7 @@ Each stage can be implemented incrementally. All three coexist in production.
 
 ## Decision Rationale
 
-* **Justification**: The three-stage approach matches increasing trust levels to increasing autonomy. Stage 1 is already deployed and needs only hardening. Stage 2 reuses existing PAM infrastructure with zero new services. Stage 3 is architecturally separate from the AI agent, avoiding the "AI with destructive access" trust problem entirely by encoding well-known procedures as deterministic workflows.
+* **Justification**: The three-stage approach matches increasing trust levels to increasing autonomy. Stage 1 is already deployed. Stage 2 reuses existing PAM infrastructure with zero new services. Stage 3 is architecturally separate from the AI agent, avoiding the "AI with destructive access" trust problem entirely by encoding well-known procedures as deterministic workflows.
 
 * **Evidence**: During the architecture analysis (see [full RFC](https://github.com/openshift-online/gcp-hcp-infra/blob/main/docs/GCP-481-agent-pam-full.md)), we evaluated 6 architecture options for agent-side PAM. The key findings were:
   - Granting PAM to a shared agent SA fails per-user isolation (PAM grants are per-principal — one user's grant benefits all concurrent users of the same SA)
@@ -54,7 +53,7 @@ Each stage can be implemented incrementally. All three coexist in production.
   - Pre-approved playbooks (Stage 3) are a legitimate alternative to AI-autonomous execution, addressing a different use case with a simpler security model
 
 * **Comparison**:
-  - **Agent-side PAM** (alternative 2): Rejected — shared SA means one user's grant benefits all concurrent sessions. Also requires the SA to have a path to destructive access, which conflicts with the read-only SA hardening goal.
+  - **Agent-side PAM** (alternative 2): Rejected — shared SA means one user's grant benefits all concurrent sessions. Also requires the SA to have a path to destructive access, which conflicts with keeping the agent SA read-only.
   - **Dual-layer PAM** (alternative 3): Viable for Stage 2 evolution but requires new infrastructure (Cloud Run service, PAM entitlement). Weaker audit trail (SA identity on workflows, not user identity). Double approval overhead during outages leads to approver fatigue and rubber-stamping.
   - **Autonomous AI agent** (alternative 4): Premature — no established trust basis for unconstrained LLM execution decisions. Prompt injection risk is unmitigated when the agent processes untrusted K8s data and has destructive access.
   - **Manual-only** (alternative 5): Safe but loses the investigation-to-remediation context that motivated this decision. SREs waste time re-deriving parameters the agent already identified.
@@ -63,7 +62,6 @@ Each stage can be implemented incrementally. All three coexist in production.
 
 ### Positive
 
-* Stage 1 hardening (conditional SA binding) is a one-line Terraform change that immediately closes the PAM bypass for the agent SA
 * Stage 2 reuses the existing PAM entitlement, approval group, and CLI — zero new GCP infrastructure
 * Stage 2 provides the best audit trail of any option: workflow executions show the actual user identity
 * Stage 2's "agent proposes, CLI executes" model defends against prompt injection at the architectural level (agent literally cannot execute destructive workflows)
@@ -84,7 +82,6 @@ Each stage can be implemented incrementally. All three coexist in production.
 
 ### Security:
 
-* **Prerequisite — SA hardening**: The `workflows-executor` SA binding must be made conditional before any stage is implemented. Without this, the agent can invoke destructive workflows regardless of what UX gates we build. This is a fail-open risk if workflow tags are misconfigured — consider monitoring for untagged PAM-intended workflows.
 * **Data access boundary**: The agent must not access customer data (etcd content, secrets, customer workload internals). Enforced via workflow-level namespace allow-lists, resource type restrictions, and agent-side data redaction.
 * **Prompt injection**: Stage 1 has zero execution risk. Stage 2 has low risk (agent proposes, cannot execute). Stage 3 has no risk for deterministic branches, variable risk if AI-assisted classification is introduced.
 * **Per-user isolation**: Stage 2 achieves this via user credentials (not shared SA). Stage 3 uses a dedicated SA — per-user isolation is not applicable (it's automated).
@@ -97,7 +94,7 @@ Each stage can be implemented incrementally. All three coexist in production.
 
 ### Operability:
 
-* Stage 1: No operational change. SA hardening is transparent.
+* Stage 1: No operational change.
 * Stage 2: SREs learn a new CLI subcommand (`wf-cli recover`) or use Gemini CLI with an MCP server. Same PAM flow they already use.
 * Stage 3: New operational procedures for managing predefined recovery workflows. Requires testing, versioning, and runbook alignment.
 
