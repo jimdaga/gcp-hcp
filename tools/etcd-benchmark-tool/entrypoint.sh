@@ -35,13 +35,6 @@ run_benchmark() {
 }
 
 run_cleanup() {
-  # Safely delete benchmark keys without touching Kubernetes data.
-  #
-  # Benchmark keys are raw bytes starting with 0x00-0x2e.
-  # Kubernetes keys start with "/" (0x2f) under /kubernetes.io/.
-  # We delete by prefix for each byte value below 0x2f, which is
-  # guaranteed safe because no Kubernetes key starts with those bytes.
-
   echo "=== etcd cleanup: deleting benchmark keys ==="
 
   # Count Kubernetes keys first (safety check)
@@ -94,7 +87,7 @@ run_cleanup() {
   echo "  Range [0, \\xff): deleted ${deleted} keys"
 
   echo "Total deleted: ${total_deleted} keys"
-  echo "(Note: keys with first byte \\x00 or \\xff may remain — reclaimed by compact+defrag)"
+  echo "(Note: keys with first byte \\x00 or \\xff may remain)"
 
   # Verify Kubernetes keys are intact
   k8s_after=$(ectl get --prefix /kubernetes.io/ \
@@ -109,66 +102,6 @@ run_cleanup() {
   echo "=== cleanup complete ==="
 }
 
-run_compact() {
-  echo "=== etcd compact (all members) ==="
-
-  # Discover all etcd members
-  members=$(ectl member list --write-out=json --command-timeout=60s 2>/dev/null \
-    | grep -o '"clientURLs":\["[^"]*"\]' | grep -o 'https://[^"]*') || true
-
-  if [ -z "$members" ]; then
-    echo "ERROR: Could not discover etcd members"
-    return 1
-  fi
-
-  echo "Discovered members:"
-  echo "$members" | while read -r url; do echo "  $url"; done
-
-  # Compact each member individually so boltdb frees pages on all members.
-  # The etcd-defrag sidecar requires visible fragmentation (>45%) before
-  # it will defrag, and fragmentation only becomes visible after compact.
-  for url in $members; do
-    name=$(echo "$url" | grep -o 'etcd-[0-9]*' || echo "$url")
-    rev=$(etcdctl --endpoints="$url" \
-      --cert=/etc/etcd/tls/client/etcd-client.crt \
-      --key=/etc/etcd/tls/client/etcd-client.key \
-      --cacert=/etc/etcd/tls/etcd-ca/ca.crt \
-      endpoint status --write-out=json --command-timeout=60s 2>/dev/null \
-      | grep -o '"revision":[0-9]*' | head -1 | cut -d: -f2)
-    echo "Compacting ${name} to revision ${rev}..."
-    etcdctl --endpoints="$url" \
-      --cert=/etc/etcd/tls/client/etcd-client.crt \
-      --key=/etc/etcd/tls/client/etcd-client.key \
-      --cacert=/etc/etcd/tls/etcd-ca/ca.crt \
-      compact "$rev" --command-timeout=300s 2>&1 || true
-  done
-
-  ectl alarm disarm 2>&1 || true
-
-  echo "Compact complete on all members. The etcd-defrag sidecar will"
-  echo "automatically defrag each member as fragmentation exceeds 45%."
-  echo "=== compact complete ==="
-}
-
-run_compact_defrag() {
-  echo "=== etcd compact + defrag ==="
-
-  rev=$(ectl endpoint status --write-out=json --command-timeout=60s 2>/dev/null \
-    | grep -o '"revision":[0-9]*' | head -1 | cut -d: -f2)
-  echo "Compacting to revision: ${rev}"
-
-  ectl compact "$rev" --command-timeout=300s 2>&1 || true
-
-  echo "Defragmenting..."
-  ectl defrag --command-timeout=300s 2>&1
-
-  ectl alarm disarm 2>&1
-
-  ectl endpoint status --write-out=table --command-timeout=60s 2>&1
-
-  echo "=== compact + defrag complete ==="
-}
-
 case "${MODE:-benchmark}" in
   benchmark)
     run_benchmark
@@ -176,14 +109,6 @@ case "${MODE:-benchmark}" in
 
   cleanup)
     run_cleanup
-    ;;
-
-  compact)
-    run_compact
-    ;;
-
-  compact-defrag)
-    run_compact_defrag
     ;;
 
   demo)
@@ -203,17 +128,12 @@ case "${MODE:-benchmark}" in
     run_cleanup
 
     echo ""
-    echo "Phase 4: Compact all members (sidecar handles defrag)"
-    run_compact
-
-    echo ""
     echo "=== DEMO COMPLETE ==="
-    echo "The etcd-defrag sidecar will defrag each member as fragmentation"
-    echo "exceeds 45%. Alerts should resolve within ~15 minutes."
+    echo "Run etcd-ops etcd-compact and remediate-etcd-pressure to resolve alerts."
     ;;
 
   *)
-    echo "Unknown MODE: ${MODE}. Supported: benchmark, cleanup, compact, compact-defrag, demo"
+    echo "Unknown MODE: ${MODE}. Supported: benchmark, cleanup, demo"
     exit 1
     ;;
 esac
