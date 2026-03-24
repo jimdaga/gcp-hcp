@@ -4,23 +4,66 @@ Container image for generating etcd write pressure on HCP management clusters. U
 
 ## Image
 
-`quay.io/cveiga/etcd-benchmark-tool:v3.5.21-3`
+`quay.io/jimd_openshift/etcd-benchmark-tool:v3.5.21-5`
 
 > **Note**: This is a temporary personal repo. The image will be moved to an official registry once one is established for the project.
 
+## Modes
+
+The container supports four modes via the `MODE` environment variable:
+
+| Mode | Description |
+|------|-------------|
+| `benchmark` (default) | Run benchmark workers to generate write/read pressure |
+| `cleanup` | Safely delete benchmark keys without touching Kubernetes data |
+| `compact-defrag` | Compact and defrag etcd to reclaim disk space |
+| `demo` | Full cycle: benchmark → sleep (for alerts) → cleanup → compact-defrag |
+
 ## What it does
 
-On startup, the container launches parallel `benchmark put` workers that write 10KB values to etcd via the `etcd-client` service. The container runs until the total key count is reached or the pod/Deployment is deleted.
+### benchmark mode (default)
+
+On startup, the container launches parallel `benchmark put` workers that write 10KB values to etcd via the `etcd-client` service. The container runs until the total key count is reached or the pod/Job is deleted.
+
+**Key format**: The benchmark tool writes sequential numeric byte keys (raw bytes, not human-readable). These keys sort **before** the `/kubernetes.io/` prefix used by HyperShift etcd for Kubernetes data.
+
+### cleanup mode
+
+Safely deletes all benchmark keys using a range delete that stops at `/kubernetes.io/`. Before deleting, it:
+
+1. Counts `/kubernetes.io/` keys (aborts if 0 — safety check)
+2. Counts total keys and calculates benchmark key count
+3. Deletes keys in range `["", "/kubernetes.io/")` — only benchmark data
+4. Verifies `/kubernetes.io/` key count is unchanged
+
+> **IMPORTANT**: HyperShift etcd uses `/kubernetes.io/` prefix, NOT `/registry/`.
+> Never use `etcdctl del "" --from-key` without `--range-end` — it deletes everything.
+
+### compact-defrag mode
+
+Compacts etcd to the current revision and runs defrag to reclaim disk space. Also disarms any alarms that may have been triggered.
+
+### demo mode
+
+Runs the full demo lifecycle as a single Job:
+
+1. **Benchmark** — generates write pressure to fill etcd
+2. **Sleep** — waits `DEMO_SLEEP_SECONDS` (default: 600 / 10 minutes) for alerts to fire and be observed
+3. **Cleanup** — safely deletes benchmark keys
+4. **Compact + Defrag** — reclaims disk space, alerts should auto-resolve
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WORKERS` | 1 | Number of parallel PUT workers |
-| `RANGE_WORKERS` | 0 | Number of parallel RANGE workers |
-| `CLIENTS` | 50 | Concurrent gRPC clients per worker |
-| `KEY_SIZE` | 256 | Key size in bytes |
-| `VAL_SIZE` | 10240 | Value size in bytes |
+| Variable | Default | Modes | Description |
+|----------|---------|-------|-------------|
+| `MODE` | benchmark | all | Operation mode: `benchmark`, `cleanup`, `compact-defrag` |
+| `WORKERS` | 1 | benchmark | Number of parallel PUT workers |
+| `RANGE_WORKERS` | 0 | benchmark | Number of parallel RANGE workers |
+| `CLIENTS` | 50 | benchmark | Concurrent gRPC clients per worker |
+| `KEY_SIZE` | 256 | benchmark | Key size in bytes |
+| `VAL_SIZE` | 10240 | benchmark | Value size in bytes |
+| `FORCE_CLEANUP` | false | cleanup, demo | Skip the /kubernetes.io/ key count safety check |
+| `DEMO_SLEEP_SECONDS` | 600 | demo | Seconds to sleep between benchmark and cleanup (for alert observation) |
 
 ### Presets (used by the start-benchmark workflow)
 
@@ -43,31 +86,28 @@ These are standard across all HCP namespaces.
 ## Build
 
 ```bash
-podman build --platform linux/amd64 -t quay.io/cveiga/etcd-benchmark-tool:v3.5.21-3 .
-podman push quay.io/cveiga/etcd-benchmark-tool:v3.5.21-3
+podman build --platform linux/amd64 -t quay.io/jimd_openshift/etcd-benchmark-tool:v3.5.21-5 .
+podman push quay.io/jimd_openshift/etcd-benchmark-tool:v3.5.21-5
 ```
 
 ## Manual usage (without workflow)
 
+### Run benchmark
+
 ```bash
 kubectl apply -n <hcp-namespace> -f - <<'EOF'
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: etcd-benchmark
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: etcd-benchmark
+  backoffLimit: 0
   template:
-    metadata:
-      labels:
-        app: etcd-benchmark
     spec:
+      restartPolicy: Never
       containers:
         - name: benchmark
-          image: quay.io/cveiga/etcd-benchmark-tool:v3.5.21-3
+          image: quay.io/jimd_openshift/etcd-benchmark-tool:v3.5.21-5
           imagePullPolicy: Always
           env:
             - name: WORKERS
@@ -93,10 +133,82 @@ spec:
 EOF
 ```
 
-Stop by deleting the Deployment:
+### Cleanup benchmark keys
 
 ```bash
-kubectl delete deployment etcd-benchmark -n <hcp-namespace>
+kubectl apply -n <hcp-namespace> -f - <<'EOF'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etcd-benchmark-cleanup
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: quay.io/jimd_openshift/etcd-benchmark-tool:v3.5.21-5
+          imagePullPolicy: Always
+          env:
+            - name: MODE
+              value: cleanup
+          volumeMounts:
+            - name: client-tls
+              mountPath: /etc/etcd/tls/client
+              readOnly: true
+            - name: etcd-ca
+              mountPath: /etc/etcd/tls/etcd-ca
+              readOnly: true
+      volumes:
+        - name: client-tls
+          secret:
+            secretName: etcd-client-tls
+            defaultMode: 0640
+        - name: etcd-ca
+          configMap:
+            name: etcd-ca
+            defaultMode: 0644
+EOF
+```
+
+### Compact and defrag
+
+```bash
+kubectl apply -n <hcp-namespace> -f - <<'EOF'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etcd-benchmark-compact
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: compact-defrag
+          image: quay.io/jimd_openshift/etcd-benchmark-tool:v3.5.21-5
+          imagePullPolicy: Always
+          env:
+            - name: MODE
+              value: compact-defrag
+          volumeMounts:
+            - name: client-tls
+              mountPath: /etc/etcd/tls/client
+              readOnly: true
+            - name: etcd-ca
+              mountPath: /etc/etcd/tls/etcd-ca
+              readOnly: true
+      volumes:
+        - name: client-tls
+          secret:
+            secretName: etcd-client-tls
+            defaultMode: 0640
+        - name: etcd-ca
+          configMap:
+            name: etcd-ca
+            defaultMode: 0644
+EOF
 ```
 
 ## Monitoring etcd during benchmark
@@ -121,44 +233,3 @@ Other useful etcdctl commands (run via `kubectl exec -n $NS etcd-0 -c etcd -- et
 | `endpoint health -w table` | Health check with latency |
 | `member list -w table` | Cluster membership |
 | `endpoint status -w json` | Machine-parseable status (for automation) |
-
-## Recovery (compact + defrag)
-
-After stopping the benchmark, compact and defrag etcd to reclaim disk space:
-
-```bash
-NS=<hcp-namespace>
-
-# Helper function (paste into your shell)
-etcdctl_exec() {
-  kubectl exec -n "$NS" etcd-0 -c etcd -- etcdctl \
-    --endpoints=https://etcd-client:2379 \
-    --cert=/etc/etcd/tls/client/etcd-client.crt \
-    --key=/etc/etcd/tls/client/etcd-client.key \
-    --cacert=/etc/etcd/tls/etcd-ca/ca.crt \
-    "$@"
-}
-
-# 1. Get current revision
-REV=$(etcdctl_exec endpoint status -w json 2>/dev/null \
-  | grep -o '"revision":[0-9]*' | head -1 | cut -d: -f2)
-
-# 2. Compact to current revision (removes old revisions)
-etcdctl_exec compact "$REV"
-
-# 3. Defrag to reclaim disk space
-etcdctl_exec defrag --command-timeout=120s
-```
-
-**If defrag fails with "no space left on device"**: Defrag creates a temporary copy of the DB file, requiring ~2x the current DB size in free disk space. Expand the PVC first:
-
-```bash
-kubectl patch pvc data-etcd-0 -n "$NS" --type=merge \
-  -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'
-
-# Wait for expansion to complete
-kubectl get pvc data-etcd-0 -n "$NS" -o jsonpath='{.status.capacity.storage}'
-
-# Retry defrag
-etcdctl_exec defrag --command-timeout=120s
-```
