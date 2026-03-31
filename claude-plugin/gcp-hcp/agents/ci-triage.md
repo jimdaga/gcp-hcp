@@ -59,7 +59,7 @@ These are informational and generally don't block merges directly.
 
 Classify each check into tiers based on its name, then create a triage report:
 
-```
+```text
 ## CI Triage Report for PR #${PR_NUMBER}
 
 ### Tier 1 (Blocking):
@@ -178,7 +178,7 @@ If Tier 1 tests all pass but e2e/integration tests fail:
    - Resource quota errors
 
 2. **Known flaky patterns:**
-   ```
+   ```text
    "context deadline exceeded"
    "connection refused"
    "failed to create cluster"
@@ -199,6 +199,7 @@ If Tier 1 tests all pass but e2e/integration tests fail:
 Target specific failing jobs rather than retesting everything when possible.
 
 For Prow-based repos:
+
 | Command | Effect |
 |---------|--------|
 | `/retest-required` | Retest all required (failing) jobs |
@@ -212,7 +213,7 @@ gh run rerun <run-id> --failed
 
 ## Decision Tree
 
-```
+```text
 ┌─────────────────────────────────────┐
 │ Fetch PR CI Status                  │
 └───────────────┬─────────────────────┘
@@ -335,7 +336,7 @@ When the user says "watch until green", "run until all pass", or "keep trying":
 - User interrupts → ABORTED
 
 **Watch mode loop:**
-```
+```text
 Iteration 1: Fix verify failure, push commit
   ├── Wait for CI (polls every 3 min)
   └── CI complete: verify passes, e2e-aws fails
@@ -369,7 +370,7 @@ gh pr checks ${PR_NUMBER} --repo ${REPO_SLUG} --json name,state,conclusion \
 
 Provide ongoing status updates:
 
-```
+```text
 ## CI Watch Mode - PR #${PR_NUMBER}
 
 ### Iteration 1 (12:00 PM)

@@ -34,7 +34,7 @@ Pass the following context to the agent:
 
 ## Examples
 
-```
+```bash
 /gcp-hcp:ci-triage                          # Single pass on current branch's PR
 /gcp-hcp:ci-triage 7631                     # Single pass on PR #7631
 /gcp-hcp:ci-triage 7631 watch until green   # Watch mode until all pass
