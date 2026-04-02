@@ -8,15 +8,14 @@
 
 Replace the hardcoded release image in the CLS Controller with controller-driven version resolution via the OpenShift Cincinnati update service.
 
-This is temporary and scoped to CLS — not a complete upgrade system. In CLM, upgrade edges will come from the HostedCluster CR's `status.version.availableUpdates`, which is populated by HyperShift and may filter edges beyond what Cincinnati provides.
-
-The CLI sends a full target version (e.g., `4.22.0-ec.4`) and channel group via the existing `release.version` and a new `release.channelGroup` field in the cluster spec. A new purpose-specific version resolution controller queries Cincinnati to resolve the exact release image for that version and reports it as a status condition. The existing HostedCluster templating controller reads the resolved image from the status condition and uses it when creating the HostedCluster CR.
+The flow is: the user specifies a full target version (e.g., `4.22.1`) and an optional channel group when creating a cluster. These are stored in the cluster spec as `release.version` and `release.channelGroup`. A new purpose-specific controller resolves the version to a release image via Cincinnati and reports it as a status condition. The existing HostedCluster templating controller then uses the resolved image when creating the HostedCluster CR.
 
 This gives us an opportunity to validate the pattern and surface any limitations of querying Cincinnati directly — learnings that will inform the CLM implementation.
 
 ## Context
 
 - **Problem Statement**: Users cannot select an OCP version when creating a GCP HCP cluster, and there is no mechanism to trigger upgrades. The controller hardcodes `quay.io/openshift-release-dev/ocp-release:4.20.0-x86_64`, requiring a Helm chart update and redeployment for every version change.
+- **CLM context**: This is temporary and scoped to CLS — not a complete upgrade system. In CLM, upgrade edges will come from the HostedCluster CR's `status.version.availableUpdates`, which is populated by HyperShift and may filter edges beyond what Cincinnati provides.
 - **Constraints**:
   - CLS Backend and Controller will be retired soon — changes must be minimal and pragmatic
   - GCP HCP is behind `TechPreviewNoUpgrade` feature gate, so Cincinnati channels may have limited content for newer versions
