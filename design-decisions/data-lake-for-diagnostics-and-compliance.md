@@ -6,29 +6,29 @@
 
 ## Decision
 
-Use a two-tier GCP-native data lake architecture: BigQuery for streaming AI diagnostic findings (small volume, actively queried) and GCS for compliance audit logs (high volume, rarely queried) with BigQuery external tables for ad-hoc access. The diagnose-agent uses Google's managed BigQuery MCP server to query its own diagnostic history before investigating new alerts, creating a feedback loop that improves diagnosis quality over time. Two reusable Terraform child modules (`data-lake` and `data-lake-sink`) provide the infrastructure, deployed per region with sinks per source project.
+Use a two-tier GCP-native data lake architecture: BigQuery for real-time streaming data that needs immediate queryability (e.g., AI diagnostic findings, operational events) and GCS for high-volume compliance data that is rarely queried (e.g., audit logs) with BigQuery external tables for ad-hoc access. Data in BigQuery is accessible to AI agents via Google's managed BigQuery MCP server, enabling agents to query historical data as part of their reasoning loop — for example, checking prior diagnostic findings before investigating a new alert, or correlating patterns across clusters and time ranges. Two reusable Terraform child modules (`data-lake` and `data-lake-sink`) provide the infrastructure, deployed per region with sinks per source project.
 
 ## Context
 
 ### Problem Statement
 
-The GCP HCP platform generates three categories of operational data with no durable, queryable persistence:
+The GCP HCP platform generates significant operational data with no durable, queryable persistence. As the platform matures and compliance requirements grow, the need for a centralized data lake will expand. The following are the immediate use cases driving this decision, but the architecture must support additional data sources as they emerge:
 
-1. **AI diagnostic findings are discarded after routing.** The Cloud Run diagnose-agent processes Prometheus alerts via Pub/Sub and routes analysis to PagerDuty, but the findings themselves (root cause analysis, confidence scores, evidence, recommendations) are lost. There is no historical record of what the AI diagnosed, making it impossible to detect recurring patterns, enrich future diagnoses with prior context, or provide SREs with a per-cluster diagnostic timeline.
+1. **AI diagnostic findings lack a queryable history.** The Cloud Run diagnose-agent processes Prometheus alerts via Pub/Sub and routes analysis to PagerDuty. While findings are preserved in PagerDuty, its API is not well-suited for cross-cluster trend analysis, pattern detection, or programmatic querying. BigQuery SQL provides a far more powerful interface for SRE investigation, AI enrichment, and fleet-wide analysis.
 
 2. **E2E test logs are destroyed with ephemeral projects.** Integration test pipelines create temporary GCP projects that are torn down after each run, permanently destroying all operational logs and diagnostic history.
 
-3. **Audit logs lack long-term queryable retention.** GKE audit logs and policy denied events are available in Cloud Logging with limited retention (30 days for Data Access, 400 days for Admin Activity). Future compliance certifications (ISO 27001, SOC 2 Type II) require durable, queryable audit log retention with controlled access. Establishing this pattern now positions the platform for certification readiness.
+3. **Audit logs lack long-term queryable retention.** GKE audit logs and policy denied events are available in Cloud Logging with limited retention (30 days for Data Access, 400 days for Admin Activity). Future compliance certifications (ISO 27001, SOC 2 Type II) require durable, queryable audit log retention with controlled access. This provides a GCP-native option that the Security team can evaluate alongside other solutions when defining certification requirements.
 
 All three use cases share a common architectural pattern: route logs from source projects to a centralized, queryable data store.
 
 ### Constraints
 
-- **Sovereignty**: Per-region data storage — no cross-region data movement. Each region project hosts its own data lake.
+- **Data location**: The data lake can be hosted at a global scope (e.g., in the global project or a dedicated project). Per-region datasets are not required unless sovereignty constraints demand it — the architecture supports both models.
 - **Cost**: Audit log volume can reach 10-50 GiB/day/cluster unfiltered. Tight inclusion filters and cost-efficient storage tiers are essential.
 - **Schema-on-first-write**: Cloud Logging determines BigQuery table schema from the first log entry. Type mismatches silently route to error tables. The diagnostic agent's Pydantic schema must be locked before the first write.
 - **Existing patterns**: Infrastructure modules must follow the established child module pattern (similar to the `workflows` module).
-- **Automation tooling**: All infrastructure must be expressible as Terraform, deployable via Atlantis. No manual `gcloud` commands or shell scripts in the provisioning path.
+- **Automation tooling**: All infrastructure must be expressible as Terraform and compatible with automated CI/CD pipelines. No manual `gcloud` commands or shell scripts in the provisioning path.
 - **Compliance readiness**: Audit log retention and access patterns should support future ISO 27001 (A.12.4) and SOC 2 Type II (CC6, CC7, CC8) certification requirements without re-architecture.
 
 ### Assumptions
@@ -36,8 +36,7 @@ All three use cases share a common architectural pattern: route logs from source
 - The diagnose-agent will continue running on Cloud Run, emitting structured JSON to stdout (captured by Cloud Logging automatically).
 - Admin Activity and System Event audit logs will remain free in Cloud Logging's `_Required` bucket with 400-day retention — no need to duplicate them to GCS.
 - Policy Denied audit logs (stored in `_Default` bucket with 30-day retention) are the only audit log type requiring GCS archival for compliance.
-- Per-region datasets are sufficient; cross-region federated queries are not required.
-- Production deployment will eventually move audit log storage to a dedicated, locked-down GCP project with restricted IAM. The module design must support configurable destination projects.
+- A centralized dataset (global or dedicated project) is the target deployment model. Cross-region federated queries are not required.
 
 ## Alternatives Considered
 
