@@ -272,20 +272,6 @@ Folder (contains all region + MC projects)
 | Does the agent use history? | YES — agent queries prior findings as Step 1, references recurring patterns in diagnosis, and escalates systemic issues |
 | SQL injection risk? | Mitigated via UUID validation on cluster_id, namespace regex, SQL metacharacter stripping |
 
-## Next Steps
-
-Implementation will be split into the following PRs, each with a corresponding Jira story under an Epic:
-
-1. **Structured diagnostic logging** (`agent/diagnose/schema.py`): Pydantic schema for `DiagnosticFinding`, emission at all agent exit paths (first streaming data source)
-2. **Data lake Terraform module** (`terraform/modules/data-lake/`): BigQuery dataset, views, alerts, centralized audit log bucket with Log Analytics
-3. **Data lake sink Terraform module** (`terraform/modules/data-lake-sink/`): Per-project sink for streaming operational data to BigQuery, filter validation
-4. **Region module integration**: Wire data-lake into region module, Atlantis IAM, variables, outputs
-5. **Folder-level audit sink + Log Analytics**: Centralized log bucket, folder-level aggregated sink, Log Analytics enablement for BigQuery SQL querying
-6. **MC module integration**: Cross-project BigQuery/MCP IAM grants, `DATA_LAKE_PROJECT_ID` env var, `agent_image_override` variable
-7. **MCP BigQuery integration** (`agent/diagnose/mcp_client.py`): MCP-to-Gemini bridge, `gemini_schema.py` shared module, knowledge docs, investigation strategy updates
-8. **Dev-all-in-one integration**: Enable data lake in example config with diagnostic + audit sinks
-9. **Production hardening**: CMEK encryption, VPC Service Controls, dedicated compliance project evaluation
-
 ---
 
 **Related Documentation:**
