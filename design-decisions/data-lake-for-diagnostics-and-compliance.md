@@ -33,17 +33,17 @@ GCP generates four types of audit logs. Understanding their volume, cost, and re
 | **Policy Denied** | Any API call **rejected** by IAM or org policy | Service account denied access, VPC Service Controls blocked, org policy violation | Low-Medium (spiky) | No | 30 days in `_Default` bucket |
 | **Data Access** | Any API call that **reads** data (get, list, watch) | `kubectl get pods`, reading a secret, querying BigQuery | **Very high** (10-200 GB/day/cluster) | No ($0.50/GiB) | 30 days in `_Default` bucket |
 
-**Key insight**: Admin Activity and System Event logs are free with 400-day retention per project. However, they are only queryable per-project via `gcloud logging read`. A folder-level aggregated sink to GCS makes them centrally queryable via BigQuery at minimal additional cost (GCS storage only — the sink routing itself is free).
+**Key insight**: Admin Activity and System Event logs are free with 400-day retention per project, but they are only queryable per-project via `gcloud logging read`. A folder-level aggregated sink to a centralized Cloud Logging log bucket with Log Analytics enabled makes them centrally queryable via standard BigQuery SQL. Log Analytics handles the complex audit log schema internally (including fields like `@type` that are invalid in BigQuery column names), eliminating the need for external tables or manual schema management.
 
 ### What We Capture vs What Stays In-Project
 
-The folder-level aggregated sink creates a *copy* of audit logs. The originals remain in each project's Cloud Logging, so per-project Logs Explorer access is unaffected:
+The folder-level aggregated sink creates a *copy* of audit logs in a centralized log bucket. The originals remain in each project's Cloud Logging, so per-project Logs Explorer access is unaffected:
 
-| Log Type | In each project's Cloud Logging | In central GCS bucket | In BigQuery (external table) |
-|----------|--------------------------------|----------------------|------------------------------|
-| Admin Activity | Yes — `_Required`, 400 days, free | Yes — copy via folder sink | Yes — queryable via `audit_activity` |
-| System Event | Yes — `_Required`, 400 days, free | Yes — copy via folder sink | Yes — queryable via `audit_system_event` |
-| Policy Denied | Yes — `_Default`, 30 days only | Yes — copy via folder sink (730-day retention) | Yes — queryable via `audit_policy_denied` |
+| Log Type | In each project's Cloud Logging | In centralized log bucket | Queryable via BigQuery |
+|----------|--------------------------------|--------------------------|----------------------|
+| Admin Activity | Yes — `_Required`, 400 days, free | Yes — copy via folder sink | Yes — via Log Analytics linked dataset |
+| System Event | Yes — `_Required`, 400 days, free | Yes — copy via folder sink | Yes — via Log Analytics linked dataset |
+| Policy Denied | Yes — `_Default`, 30 days only | Yes — copy via folder sink (configurable retention) | Yes — via Log Analytics linked dataset |
 | Data Access | Yes — `_Default`, 30 days | **Not captured** — too high volume | No |
 
 **Data Access logs are intentionally excluded** due to extreme volume (10-200 GB/day/cluster). If needed for specific compliance requirements, they can be enabled selectively with tight filters.
@@ -68,9 +68,9 @@ The folder-level aggregated sink creates a *copy* of audit logs. The originals r
 
 2. **GCS for all log types with BigQuery external tables**: Route everything to GCS buckets with lifecycle policies. Create BigQuery external tables for ad-hoc querying. Cheapest storage, but higher query latency and no streaming capability.
 
-3. **Two-tier: BigQuery streaming for diagnostics + GCS for audit logs (chosen)**: Route diagnostic findings to BigQuery (small volume, frequent queries, real-time visibility) and audit logs to GCS (high volume, compliance retention, rare queries) with BigQuery external tables for ad-hoc access.
+3. **Two-tier: BigQuery streaming for diagnostics + GCS for audit logs**: Route diagnostic findings to BigQuery (small volume, frequent queries, real-time visibility) and audit logs to GCS (high volume, compliance retention, rare queries) with BigQuery external tables for ad-hoc access.
 
-4. **Cloud Logging Log Analytics linked datasets**: Use Cloud Logging's built-in BigQuery integration. Zero configuration — just enable Log Analytics on the log bucket.
+4. **Two-tier: BigQuery streaming for diagnostics + Log Analytics for audit logs (chosen)**: Route diagnostic findings to BigQuery via per-project sinks. Route audit logs to a centralized Cloud Logging log bucket via folder-level aggregated sink, with Log Analytics enabled for BigQuery SQL querying.
 
 5. **Third-party solutions (Datadog, Splunk, Elastic)**: External log aggregation and analysis platforms.
 
@@ -82,11 +82,11 @@ The two-tier approach optimizes for the different access patterns and cost profi
 
 - **Diagnostic findings** are small (KB per finding), queried frequently (SRE investigations, AI enrichment, trend analysis), and need real-time visibility. BigQuery streaming is ideal — near-instant query availability at negligible cost for this volume.
 
-- **Audit logs** are high volume (potentially GiB/day/cluster), queried rarely (compliance audits, security investigations), and primarily need durable retention. GCS is 5-10x cheaper than BigQuery for storage, with lifecycle policies that automatically transition to Nearline (90 days) and Archive (365 days) storage classes.
+- **Audit logs** are high volume (potentially GiB/day/cluster), queried rarely (compliance audits, security investigations), and primarily need durable retention. A centralized Cloud Logging log bucket with Log Analytics provides a linked BigQuery dataset with standard SQL querying — no external tables, no schema management, and no issues with complex audit log field names.
 
 - **Folder-level aggregated sinks** capture audit logs from all projects under a folder with a single sink definition. New projects are automatically included — no per-project configuration required. The sink creates a copy; original logs remain in each project for Logs Explorer access.
 
-BigQuery external tables bridge the gap — audit logs in GCS are queryable via standard SQL with zero data duplication. The external tables cost nothing until queried, and when queried, only scan the relevant files.
+- **Log Analytics** was initially rejected but reconsidered after evaluating the alternative (GCS + BigQuery external tables). External tables require explicit schema management and cannot handle Cloud Audit Log fields with characters invalid in BigQuery column names (`@type`, `authorization.k8s.io/`). Log Analytics handles these internally, providing a clean query surface with zero schema maintenance. The cost difference (~$1,020/yr vs ~$300/yr at production scale) is justified by the elimination of operational complexity.
 
 ### Evidence
 
@@ -108,11 +108,11 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 - Audit logs are rarely queried — paying for BigQuery active storage ($0.02/GiB/month) when GCS Archive is $0.0012/GiB/month wastes 94% of the storage budget
 - At 200 clusters: ~$5,800/month (BigQuery) vs ~$281/month (GCS with lifecycle)
 
-**Alternative 4 (Log Analytics)** was rejected because:
-- Log Analytics linked datasets are read-only — no DML, no clustering, no views
-- Cannot create external tables or materialized views
-- Limited SQL dialect compared to standard BigQuery
-- No partition filter enforcement
+**Alternative 3 (GCS + external tables)** was initially implemented but rejected because:
+- Cloud Audit Logs contain `@type` fields that are invalid in BigQuery column names — external tables cannot handle them with autodetect or explicit schemas
+- Workaround (flat schema with `JSON_VALUE()` queries) adds ongoing complexity and non-standard query patterns
+- Two-phase deployment required (create bucket → wait for data → create external tables)
+- Cost savings (~$720/yr at production scale) did not justify the operational burden
 
 **Alternative 5 (Third-party)** was rejected because:
 - Adds external dependency and vendor lock-in
@@ -123,9 +123,9 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 
 ### Positive
 
-- **Cost-optimized storage**: Diagnostic findings in BigQuery (pennies/month at expected volume), audit logs in GCS with automatic tiering (Standard → Nearline → Archive) — 94% cheaper than all-BigQuery at scale
-- **Unified query surface**: BigQuery SQL for both data tiers — native tables for diagnostics, external tables for audit logs. Views flatten the Cloud Logging envelope schema for ease of use
-- **Compliance-ready**: GCS bucket with versioning, public access prevention, and configurable retention (default 730 days) meets ISO 27001 and SOC 2 audit log retention requirements
+- **Cost-optimized storage**: Diagnostic findings in BigQuery (pennies/month at expected volume), audit logs in a centralized log bucket with Log Analytics (~$1,020/yr at production scale)
+- **Unified query surface**: Standard BigQuery SQL for both data tiers — native tables for diagnostics, Log Analytics linked dataset for audit logs. No external tables, no schema management, no `JSON_VALUE()` workarounds
+- **Compliance-ready**: Centralized log bucket with configurable retention meets ISO 27001 and SOC 2 audit log retention requirements. Logs are immutable within Cloud Logging
 - **Zero-maintenance audit capture**: Folder-level aggregated sink automatically captures audit logs from all current and future projects under the folder — no per-project configuration needed
 - **Reusable modules**: `data-lake` (dataset + bucket + external tables + views) and `data-lake-sink` (configurable sink for diagnostic findings) follow the established child module pattern
 - **AI enrichment via MCP**: The diagnose-agent connects to Google's managed BigQuery MCP server to query a cluster's prior diagnostic history before investigating new alerts. This creates a feedback loop — the agent references prior root causes, detects recurring patterns, and escalates systemic issues instead of repeating point remediations. Validated end-to-end: agent queries history, finds prior PVC alerts, and incorporates that context into current etcd diagnosis.
@@ -135,11 +135,11 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 
 ### Negative
 
-- **Two-phase external table deployment**: BigQuery external tables require data in GCS before they can be created with autodetect. The `enable_audit_external_tables` flag gates creation — operators must set it to `true` after audit sinks deliver their first batch (up to 3 hours). This adds operational friction to initial deployment.
-- **Explicit audit schema maintenance**: The external table schema must be maintained manually in Terraform (JSON) because Cloud Audit Log entries contain fields with characters invalid in BigQuery column names (`@type`, `authorization.k8s.io/`). If Google adds important new fields to the audit log format, the schema must be updated manually. The `ignore_unknown_values = true` setting prevents breakage but silently drops unrecognized fields.
+- **Log Analytics is read-only**: The linked BigQuery dataset does not support DML, views, clustering, or materialized views. Queries use standard SQL but cannot create derived tables within the linked dataset. Saved queries or views in a separate dataset can reference the linked dataset if needed.
+- **Log Analytics ingestion cost**: Routing audit logs to a centralized log bucket incurs Cloud Logging ingestion pricing ($0.50/GiB), even for Admin Activity and System Event logs that are free in per-project `_Required` buckets. At production scale (~170 GiB/month), this is ~$85/month — a deliberate trade-off for centralized queryability.
 - **Sink-auto-created table name fragility**: The diagnostic findings table is auto-created by Cloud Logging with a name derived from the log source (e.g., `run_googleapis_com_stdout` for Cloud Run stdout). If the agent moves to a different execution environment, the table name changes. The `diagnostic_findings_table` variable mitigates this but doesn't eliminate the coupling.
-- **No real-time audit log queries**: GCS sink delivery is batched (hourly). Audit logs are not queryable in BigQuery until the next batch arrives. For real-time audit queries, use Cloud Logging directly (per-project).
 - **Folder sink requires folder-level permissions**: The Terraform identity creating the folder sink needs `roles/logging.configWriter` at the folder level, which may require coordination with platform admins in production.
+- **Log bucket retention limits**: Cloud Logging log buckets support a maximum retention of 3,650 days (10 years). If longer retention is required for compliance, a secondary GCS archive sink can be added alongside the Log Analytics bucket.
 
 ## Cross-Cutting Concerns
 
@@ -151,42 +151,45 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 
 ### Security
 
-* **Encryption at rest**: For the spike, Google-managed encryption is used. Production deployment MUST add CMEK (Customer-Managed Encryption Keys) to both the GCS bucket (`encryption` block) and BigQuery dataset (`default_encryption_configuration`).
-* **Public access prevention**: GCS bucket enforces `public_access_prevention = "enforced"` and `uniform_bucket_level_access = true`.
-* **Bucket versioning**: Enabled for audit log immutability — prevents accidental overwrites or deletes.
-* **IAM least privilege**: Sink writer identities get only the minimum required role (BigQuery `dataEditor` or GCS `objectCreator`).
+* **Encryption at rest**: For the spike, Google-managed encryption is used. Production deployment MUST add CMEK (Customer-Managed Encryption Keys) to the BigQuery dataset (`default_encryption_configuration`) and the centralized log bucket.
+* **Audit log immutability**: Cloud Logging log buckets are append-only — logs cannot be modified or deleted once written. This is stronger than GCS bucket versioning.
+* **IAM least privilege**: Sink writer identities get only the minimum required role. The centralized log bucket restricts access to authorized principals only.
 * **MCP security**: The MCP client uses Application Default Credentials with `bigquery.readonly` scope (read-only). Access tokens are cached with thread-safe refresh. Error messages are sanitized to strip project IDs and service account emails before returning to the model. The `DATA_LAKE_PROJECT_ID` env var is validated against GCP project ID format regex before prompt injection.
 * **SQL injection prevention**: Alert payload fields (cluster_id, namespace, region) are validated against strict format regexes (UUID, k8s namespace, GCP region) before the model constructs SQL queries. SQL metacharacters (`;`, `'`, `"`, `\`) are stripped.
 
 ### Cost
 
-**Estimated monthly costs (folder-level aggregated sink, on-demand BigQuery pricing):**
+**Estimated monthly costs (production scale: 30 regions, ~180 projects, ~2,500 hosted clusters):**
 
-| Component | 10 Clusters | 50 Clusters | 200 Clusters |
-|-----------|-------------|-------------|--------------|
-| BigQuery streaming (diagnostics) | $0.02 | $0.08 | $0.30 |
-| BigQuery storage (diagnostics) | $0.02 | $0.09 | $0.36 |
-| BigQuery queries (on-demand) | FREE (<1 TB) | FREE (<1 TB) | $0.01 |
-| GCS storage (all audit types, tiered) | $15 | $75 | $300 |
-| **Total** | **~$15** | **~$75** | **~$300** |
+| Component | Dev (10 clusters) | Production (~2,500 clusters) |
+|-----------|-------------------|------------------------------|
+| BigQuery streaming (diagnostics) | $0.02 | $0.30 |
+| BigQuery storage (diagnostics) | $0.02 | $0.36 |
+| BigQuery queries (on-demand) | FREE (<1 TB) | FREE (<1 TB) |
+| Log Analytics ingestion (audit logs) | $3 | $85 |
+| **Total** | **~$3** | **~$85/mo (~$1,020/yr)** |
 
 **Key cost decisions:**
-- Folder-level aggregated sink captures all three audit log types (Admin Activity, System Event, Policy Denied) in one GCS bucket. Admin Activity and System Event are low volume — the marginal GCS storage cost is minimal compared to the cross-project queryability benefit.
-- GCS lifecycle automatically transitions to cheaper tiers: Standard ($0.020/GiB) → Nearline ($0.010/GiB at 90 days) → Archive ($0.0012/GiB at 365 days).
-- Default retention is 730 days (2 years). Configurable up to 10 years.
-- Data Access logs are NOT captured — too high volume ($0.50/GiB ingestion). Enable selectively if needed.
-- BigQuery storage alert and GCS storage alert provide bill shock protection.
+- Folder-level aggregated sink captures all three audit log types (Admin Activity, System Event, Policy Denied) in one centralized log bucket with Log Analytics enabled.
+- Log Analytics ingestion costs $0.50/GiB but eliminates GCS storage costs, external table management, and schema maintenance. At production scale (~170 GiB/month audit data), this is ~$85/month — justified by operational simplicity.
+- Data Access logs are NOT captured — too high volume ($0.50/GiB ingestion, 10-200 GB/day/cluster). Enable selectively if needed.
+- BigQuery storage alert provides bill shock protection for diagnostic findings.
 - Filter validation on the sink module prevents accidental empty-filter cost explosion.
+
+**Cost comparison — why Log Analytics over GCS:**
+
+| Approach | Annual Cost (production) | Schema Maintenance | Setup Complexity |
+|----------|-------------------------|-------------------|-----------------|
+| GCS + External Tables | ~$300/yr | High (manual JSON schema, `@type` workarounds) | Two-phase deployment |
+| Log Analytics | ~$1,020/yr | None (handled by Google) | Single deployment |
+
+The ~$720/yr premium eliminates ongoing operational burden.
 
 ### Operability
 
-* **Deployment model**: `data-lake` module deploys the BigQuery dataset, GCS bucket, external tables, views, and alerts. `data-lake-sink` module deploys per-project sinks for diagnostic findings (streaming to BigQuery). Audit log routing uses a folder-level aggregated sink (single Terraform resource).
-* **One-time two-phase setup for external tables**: The initial data lake deployment requires two applies:
-  1. **First apply**: Creates the GCS bucket, folder sink, BigQuery dataset, and views. External tables are disabled (`enable_audit_external_tables = false`).
-  2. **Wait ~1 hour** for the folder sink to deliver its first batch of audit logs to GCS.
-  3. **Second apply**: Enable external tables (`enable_audit_external_tables = true`). BigQuery autodetect infers the schema from the delivered data.
-
-  This is a **one-time operation per environment** (e.g., once for dev, once for production). After the data lake is established, adding new projects requires zero configuration — the folder sink's `include_children = true` automatically captures audit logs from any new project added under the folder. No additional Terraform changes, sinks, or external table updates are needed.
+* **Deployment model**: `data-lake` module deploys the BigQuery dataset, views, and alerts for diagnostic findings. Audit log routing uses a folder-level aggregated sink to a centralized log bucket with Log Analytics enabled — a single Terraform resource that captures all current and future projects. `data-lake-sink` module deploys per-project sinks for diagnostic findings (streaming to BigQuery).
+* **Single-phase deployment**: Unlike the GCS approach (which required two applies), Log Analytics works immediately. The folder sink routes to a centralized log bucket, Log Analytics creates the linked BigQuery dataset, and audit logs are queryable via SQL as soon as data arrives. No external tables to create, no schema to manage.
+* **Zero-config for new projects**: The folder sink's `include_children = true` automatically captures audit logs from any new project added under the folder. No additional Terraform changes, sinks, or configuration needed.
 * **BigQuery views**: Four pre-built views (`view_recent_findings`, `view_findings_by_cluster`, `view_repeat_offenders`, `view_daily_summary`) provide immediate value without SQL knowledge.
 * **Notebook templates**: Jupyter notebooks for diagnostic findings analysis and audit log investigation are provided for local use (VS Code) with BigQuery Python client.
 
@@ -197,16 +200,14 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 ```
 Folder (contains all region + MC projects)
     │
-    ├── Folder-Level Aggregated Sink ──→ GCS Bucket
-    │     filter: Admin Activity OR        ├── /activity/YYYY/MM/DD/*.json
-    │             System Event OR          ├── /system_event/YYYY/MM/DD/*.json
-    │             Policy Denied            └── /policy/YYYY/MM/DD/*.json
-    │     include_children: true                    │
-    │     (captures ALL projects                    ▼
-    │      under folder automatically)    BigQuery External Tables
-    │                                     ├── audit_activity
-    │                                     ├── audit_system_event
-    │                                     └── audit_policy_denied
+    ├── Folder-Level Aggregated Sink ──→ Centralized Log Bucket
+    │     filter: Admin Activity OR        (Log Analytics enabled)
+    │             System Event OR                   │
+    │             Policy Denied                     ▼
+    │     include_children: true          Linked BigQuery Dataset (automatic)
+    │     (captures ALL projects          ├── standard SQL queries
+    │      under folder automatically)    ├── full audit log schema
+    │                                     └── no @type issues
     │
     ├── Per-Project: Cloud Run diagnose-agent
     │       │
@@ -239,21 +240,21 @@ Folder (contains all region + MC projects)
 
 | Module | Purpose | Deploys From |
 |--------|---------|-------------|
-| `data-lake` | BigQuery dataset, GCS bucket, external tables, views, alerts | Region or global module |
+| `data-lake` | BigQuery dataset, views, alerts for diagnostic findings | Global or region module |
 | `data-lake-sink` | Per-project log sink for diagnostic findings (BigQuery streaming) | Caller (region config, MC config) |
-| Folder sink | Aggregated audit log sink (Admin Activity + System Event + Policy Denied → GCS) | Folder-level Terraform config |
+| Folder sink + log bucket | Centralized audit log bucket with Log Analytics | Folder-level Terraform config |
 
 ### Component Summary
 
 | Component | Resource Type | Managed By | Purpose |
 |-----------|-------------|-----------|---------|
-| BigQuery dataset | `google_bigquery_dataset` | Terraform (data-lake module) | Houses diagnostic findings and external tables |
-| GCS audit bucket | `google_storage_bucket` | Terraform (data-lake module) | Stores audit logs from all projects |
-| External tables | `google_bigquery_table` (external) | Terraform (data-lake module) | Queryable view over GCS audit data (activity, system_event, policy_denied) |
+| BigQuery dataset | `google_bigquery_dataset` | Terraform (data-lake module) | Houses diagnostic findings and views |
 | BigQuery views | `google_bigquery_table` (view) | Terraform (data-lake module) | Pre-built diagnostic queries |
-| Storage alerts | `google_monitoring_alert_policy` | Terraform (data-lake module) | BigQuery and GCS cost guardrails |
+| Storage alerts | `google_monitoring_alert_policy` | Terraform (data-lake module) | BigQuery cost guardrails |
 | Diagnostic sink | `google_logging_project_sink` | Terraform (data-lake-sink module) | Per-project: routes findings to BigQuery |
-| Audit sink | `google_logging_folder_sink` | Terraform (folder-level config) | Folder-level: routes all audit logs to GCS |
+| Centralized log bucket | `google_logging_project_bucket_config` | Terraform (folder-level config) | Stores audit logs from all projects with Log Analytics |
+| Audit sink | `google_logging_folder_sink` | Terraform (folder-level config) | Folder-level: routes all audit logs to centralized log bucket |
+| Log Analytics linked dataset | Automatic (linked to log bucket) | Google-managed | BigQuery SQL interface over audit logs |
 | MCP client bridge | `mcp_client.py` (Python) | Agent code | Connects agent to BigQuery MCP for history queries |
 | MCP cross-project IAM | `google_project_iam_member` | Terraform (MC region-iam.tf) | `bigquery.dataViewer`, `bigquery.jobUser`, `mcp.toolUser` for MC agent → data lake |
 
@@ -261,12 +262,11 @@ Folder (contains all region + MC projects)
 
 | Question | Finding |
 |----------|---------|
-| Native tables vs external tables? | Use both: native for diagnostics (streaming), external for audit logs (GCS) |
+| Native tables vs external tables vs Log Analytics? | Native BigQuery for diagnostics (streaming). Log Analytics for audit logs (eliminates schema issues, no external tables needed) |
 | Per-project vs folder-level audit sinks? | Folder-level aggregated sink — one sink captures all projects, auto-includes new ones |
+| GCS vs Log Analytics for audit logs? | Log Analytics chosen. GCS external tables failed due to `@type` field name conflicts. Log Analytics handles this internally. Cost premium (~$720/yr) justified by zero schema maintenance |
 | Schema-on-first-write risk? | Mitigated by Pydantic schema validation in agent code. Schema version field tracks evolution |
-| Cost at scale? | ~$300/month at 200 clusters (all audit types). Would be ~$5,800 if using BigQuery streaming |
-| External table schema? | Must be explicit (not autodetect) due to `@type` and `k8s.io/` field name characters |
-| Two-phase deployment? | Required — external tables gated by `enable_audit_external_tables` flag |
+| Cost at scale? | ~$85/month at production scale (~2,500 clusters). Would be ~$5,800 if using BigQuery streaming for audit logs |
 | MCP BigQuery integration? | Google Managed MCP server works for cross-project queries. Requires `roles/mcp.toolUser`, `bigquery.dataViewer`, `bigquery.jobUser` on the data lake project |
 | Does the agent use history? | YES — agent queries prior findings as Step 1, references recurring patterns in diagnosis, and escalates systemic issues |
 | SQL injection risk? | Mitigated via UUID validation on cluster_id, namespace regex, SQL metacharacter stripping |
@@ -276,14 +276,14 @@ Folder (contains all region + MC projects)
 Implementation will be split into the following PRs, each with a corresponding Jira story under an Epic:
 
 1. **Structured diagnostic logging** (`agent/diagnose/schema.py`): Pydantic schema for `DiagnosticFinding`, emission at all agent exit paths
-2. **Data lake Terraform module** (`terraform/modules/data-lake/`): BigQuery dataset, GCS bucket, external tables, views, alerts
-3. **Data lake sink Terraform module** (`terraform/modules/data-lake-sink/`): Configurable sink with BigQuery and GCS support, filter validation
+2. **Data lake Terraform module** (`terraform/modules/data-lake/`): BigQuery dataset, views, alerts for diagnostic findings
+3. **Data lake sink Terraform module** (`terraform/modules/data-lake-sink/`): Per-project sink for diagnostic findings (BigQuery streaming), filter validation
 4. **Region module integration**: Wire data-lake into region module, Atlantis IAM, variables, outputs
-5. **Folder-level audit sink**: Aggregated sink for Admin Activity + System Event + Policy Denied
+5. **Folder-level audit sink + Log Analytics**: Centralized log bucket, folder-level aggregated sink, Log Analytics enablement for BigQuery SQL querying
 6. **MC module integration**: Cross-project BigQuery/MCP IAM grants, `DATA_LAKE_PROJECT_ID` env var, `agent_image_override` variable
 7. **MCP BigQuery integration** (`agent/diagnose/mcp_client.py`): MCP-to-Gemini bridge, `gemini_schema.py` shared module, knowledge docs, investigation strategy updates
 8. **Dev-all-in-one integration**: Enable data lake in example config with diagnostic + audit sinks
-9. **Production hardening**: CMEK encryption, narrow Atlantis IAM, VPC Service Controls, dedicated compliance project evaluation
+9. **Production hardening**: CMEK encryption, VPC Service Controls, dedicated compliance project evaluation
 
 ---
 
