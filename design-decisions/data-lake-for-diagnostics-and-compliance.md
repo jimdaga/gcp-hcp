@@ -294,15 +294,17 @@ Folder (contains all region + MC projects)
 
 ## Table Naming
 
-BigQuery tables created by Cloud Logging sinks are auto-named after the log source (e.g., `run_googleapis_com_stdout` for Cloud Run stdout). For production clarity, each data source should use a custom Cloud Logging log name to produce a meaningful table name:
+BigQuery tables created by Cloud Logging sinks are auto-named after the log source (e.g., `run_googleapis_com_stdout` for Cloud Run stdout). For production clarity, each data source uses the `google-cloud-logging` Python client to write to a **custom log name**, producing a meaningful BigQuery table name:
 
 | Data Source | Log Name | BigQuery Table | Status |
 |------------|----------|---------------|--------|
-| Diagnose agent findings | `diagnostic_findings` | `diagnostic_findings` | Planned — use Cloud Run custom log name |
+| Diagnose agent findings | `diagnostic_findings` | `diagnostic_findings` | Implemented |
 | E2E test results | `e2e_test_results` | `e2e_test_results` | Future |
 | ArgoCD promotion state | `argocd_promotions` | `argocd_promotions` | Future |
 
-BigQuery views (e.g., `view_recent_findings`) provide a clean query surface on top of these tables regardless of the underlying table name.
+BigQuery views (e.g., `view_recent_findings`) provide a clean query surface on top of these tables.
+
+**Important: Cloud Run does not support log name overrides via stdout/stderr.** The `logging.googleapis.com/logName` field in structured JSON is only processed by the Logging agent on GCE/GKE, not by Cloud Run. Applications running on Cloud Run must use the `google-cloud-logging` Python client (or equivalent) to write directly to the Cloud Logging API with a custom log name. This requires `roles/logging.logWriter` on the application's service account.
 
 ## Future Data Sources
 
@@ -312,7 +314,12 @@ The data lake architecture is designed to support additional streaming data sour
 - **E2E promotion test results**: Pass/fail results from environment-targeted promotion tests, enabling confidence scoring before promoting to the next environment
 - **Cluster lifecycle events**: Creation, deletion, scaling, and upgrade events for fleet-wide tracking
 
-Each new data source follows the same pattern: emit structured JSON with a custom log name → Cloud Logging sink → BigQuery table → views for querying.
+Each new data source follows the same pattern:
+1. Define a Pydantic schema for structured output
+2. Use `google-cloud-logging` to write to a custom log name (requires `roles/logging.logWriter`)
+3. Create a Cloud Logging sink filtering on `log_id("<log_name>")`
+4. BigQuery auto-creates a table named after the log name
+5. Create views for user-friendly querying
 
 ---
 
