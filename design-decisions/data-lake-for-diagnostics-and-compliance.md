@@ -69,7 +69,7 @@ The folder-level aggregated sink creates a *copy* of audit logs in a centralized
 ### Constraints
 
 - **Data location**: The data lake can be hosted at a global scope (e.g., in the global project or a dedicated project). Per-region datasets are not required unless sovereignty constraints demand it — the architecture supports both models.
-- **Cost**: Audit log volume can reach 10-50 GiB/day/cluster unfiltered. Tight inclusion filters and cost-efficient storage tiers are essential.
+- **Cost**: Audit log volume can be substantial when unfiltered and should be estimated at the project level for this architecture (multiple hosted clusters per MC project). Tight inclusion filters and cost-efficient storage tiers are essential.
 - **Schema-on-first-write**: Cloud Logging determines BigQuery table schema from the first log entry. Type mismatches silently route to error tables. Any application emitting structured logs to BigQuery via a sink must have its schema locked before the first write.
 - **Existing patterns**: Infrastructure modules must follow the established child module pattern (similar to the `workflows` module).
 - **Automation tooling**: All infrastructure must be expressible as Terraform and compatible with automated CI/CD pipelines. No manual `gcloud` commands or shell scripts in the provisioning path.
@@ -124,7 +124,7 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 **Alternative 1 (BigQuery for everything)** was rejected because:
 - Audit log volume at scale (10-50 GiB/day/cluster) makes BigQuery streaming ingestion expensive ($0.05/GiB)
 - Audit logs are rarely queried — paying for BigQuery active storage ($0.02/GiB/month) when GCS Archive is $0.0012/GiB/month wastes 94% of the storage budget
-- At 200 clusters: ~$5,800/month (BigQuery) vs ~$281/month (GCS with lifecycle)
+- At intermediate scale (200 clusters): ~$5,800/month (BigQuery) vs ~$281/month (GCS with lifecycle). At production scale (~2,500 clusters, ~180 projects): costs scale proportionally — the chosen Log Analytics solution costs ~$85-225/month (see Cost section)
 
 **Alternative 3 (GCS + external tables)** was initially implemented but rejected because:
 - Cloud Audit Logs contain `@type` fields that require backtick-quoting in BigQuery — external tables with autodetect fail, and explicit schemas require workarounds for every query
@@ -155,7 +155,7 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 ### Negative
 
 - **Log Analytics is read-only**: The linked BigQuery dataset does not support DML, views, clustering, or materialized views. Queries use standard SQL but cannot create derived tables within the linked dataset. Saved queries or views in a separate dataset can reference the linked dataset if needed.
-- **Log Analytics ingestion cost**: Routing audit logs to a centralized log bucket incurs Cloud Logging ingestion pricing ($0.50/GiB), even for Admin Activity and System Event logs that are free in per-project `_Required` buckets. At production scale (~170 GiB/month), this is ~$85/month — a deliberate trade-off for centralized queryability.
+- **Log Analytics ingestion cost**: Routing audit logs to a centralized log bucket incurs Cloud Logging ingestion pricing ($0.50/GiB), even for Admin Activity and System Event logs that are free in per-project `_Required` buckets. At production scale, this is ~$85-225/month (volume-dependent) — a deliberate trade-off for centralized queryability.
 - **Sink-auto-created table name fragility**: BigQuery tables created by Cloud Logging sinks are named after the log source (e.g., `run_googleapis_com_stdout` for Cloud Run stdout). If the source changes execution environment, the table name changes. The `diagnostic_findings_table` variable mitigates this but doesn't eliminate the coupling.
 - **Folder sink requires folder-level permissions**: The Terraform identity creating the folder sink needs `roles/logging.configWriter` at the folder level, which may require coordination with platform admins in production.
 - **Log bucket retention limits**: Cloud Logging log buckets support a maximum retention of 3,650 days (10 years). If longer retention is required for compliance, a secondary GCS archive sink can be added alongside the Log Analytics bucket.
@@ -173,7 +173,7 @@ Spike validation ([GCP-497](https://redhat.atlassian.net/browse/GCP-497)) confir
 * **Encryption at rest**: For the spike, Google-managed encryption is used. Production deployment MUST add CMEK (Customer-Managed Encryption Keys) to the BigQuery dataset (`default_encryption_configuration`) and the centralized log bucket.
 * **Audit log immutability**: Cloud Logging log buckets are append-only — logs cannot be modified or deleted once written. This is stronger than GCS bucket versioning.
 * **IAM least privilege**: Sink writer identities get only the minimum required role. The centralized log bucket restricts access to authorized principals only.
-* **MCP security**: The MCP client uses Application Default Credentials with `bigquery.readonly` scope (read-only). Access tokens are cached with thread-safe refresh. Error messages are sanitized to strip project IDs and service account emails before returning to the model. The `DATA_LAKE_PROJECT_ID` env var is validated against GCP project ID format regex before prompt injection.
+* **MCP security**: The MCP client uses Application Default Credentials with `bigquery.readonly` scope (read-only). Access tokens are cached with thread-safe refresh. Error messages are sanitized to strip project IDs and service account emails before returning to the model. The `DATA_LAKE_PROJECT_ID` env var is validated against GCP project ID format regex to prevent prompt injection attacks.
 * **SQL injection prevention**: Alert payload fields (cluster_id, namespace, region) are validated against strict format regexes (UUID, k8s namespace, GCP region) before the model constructs SQL queries. SQL metacharacters (`;`, `'`, `"`, `\`) are stripped.
 
 ### Cost
@@ -218,7 +218,7 @@ The premium eliminates ongoing schema management, query syntax workarounds, and 
 
 ### Data Flow
 
-```
+```text
 Folder (contains all region + MC projects)
     │
     ├── Folder-Level Aggregated Sink ──→ Centralized Log Bucket
