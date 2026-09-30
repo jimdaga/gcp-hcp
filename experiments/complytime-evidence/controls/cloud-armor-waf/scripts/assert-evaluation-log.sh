@@ -31,12 +31,31 @@ if [[ ! -f "$log_path" ]]; then
 	exit 2
 fi
 
-if ! command -v yq >/dev/null 2>&1; then
-	printf 'required command not found: yq\n' >&2
-	exit 2
-fi
+for tool in yq jq; do
+	if ! command -v "$tool" >/dev/null 2>&1; then
+		printf 'required command not found: %s\n' "$tool" >&2
+		exit 2
+	fi
+done
 
-if ! yq -e \
+yq_version="$(yq --version 2>/dev/null || true)"
+case "$yq_version" in
+	*github.com/mikefarah/yq*) yq_flavor=mikefarah ;;
+	'yq '*) yq_flavor=jq-wrapper ;;
+	*)
+		printf 'unsupported yq implementation; use Mike Farah yq v4 or the Python yq jq wrapper\n' >&2
+		exit 2
+		;;
+esac
+
+yq_to_json() {
+	case "$yq_flavor" in
+		mikefarah) yq -o=json '.' "$log_path" 2>/dev/null ;;
+		jq-wrapper) yq '.' "$log_path" 2>/dev/null ;;
+	esac
+}
+
+if ! yq_to_json | jq -e \
 	--arg expected "$expected_result" \
 	--arg requirement_id "$requirement_id" \
 	'(.result == $expected)
@@ -44,7 +63,7 @@ if ! yq -e \
 		| .["assessment-logs"][]?
 		| select(.requirement["entry-id"] == $requirement_id)
 		| .result] == [$expected])' \
-	"$log_path" >/dev/null 2>&1; then
+	>/dev/null 2>&1; then
 	printf 'EvaluationLog does not contain the expected %s result for %s\n' \
 		"$expected_result" "$requirement_id" >&2
 	exit 1

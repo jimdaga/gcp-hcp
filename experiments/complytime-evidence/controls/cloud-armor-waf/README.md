@@ -56,6 +56,7 @@ Run the commands from this directory so the local Gemara and CUE file references
 ### Prerequisites
 
 - `make`, Bash, `git`, `curl`, `jq`, `yq`, `conftest`, `oras`, `shasum`, and Podman.
+- There are two common, incompatible tools named `yq`: this prototype supports both Mike Farah `yq` v4 and the Python `yq` jq-wrapper.
 - Go 1.26.7 or newer. `make install-tools` sets `GOTOOLCHAIN=auto`, so Go can download a compatible toolchain when the system Go is older (network access is needed the first time).
 - ORAS 1.3.2 on `PATH` (`oras version` should report version `1.3.2`; build metadata such as `+Homebrew` may follow it). This prototype does not install ORAS for you.
 - `gcloud` and an identity with read access to the selected resources are needed only for `make scan-live`.
