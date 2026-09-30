@@ -85,15 +85,19 @@ run_case() {
 }
 
 run_case "active-preconfigured-waf" pass "" '.'
+run_case "active-cloud-armor-custom-deny-action" pass "" \
+	'.securityPolicy.rules[0].match.expr.expression = "origin.region_code == '\''US'\''"'
+run_case "active-cloud-armor-rate-limit-action" pass "" \
+	'.securityPolicy.rules[0].action = "throttle" | .securityPolicy.rules[0].match.expr.expression = "origin.region_code == '\''US'\''" | .securityPolicy.rules[0].rateLimitOptions = {"rateLimitThreshold":{"count":100,"intervalSec":60},"conformAction":"allow","exceedAction":"deny(429)"}'
 run_case "detached-policy" fail "backend service is not attached" \
 	'.backendService.securityPolicy = "https://www.googleapis.com/compute/v1/projects/synthetic-project/global/securityPolicies/another-policy"'
 run_case "empty-policy-references" fail "backend service is not attached" \
 	'.backendService.securityPolicy = "" | .securityPolicy.selfLink = ""'
-run_case "no-preconfigured-waf" fail "no active, non-preview preconfigured WAF rule" \
-	'.securityPolicy.rules[0].action = "throttle" | .securityPolicy.rules[0].match.expr.expression = "origin.region_code == '\''US'\''"'
+run_case "no-enforcing-rule" fail "no active, non-preview Cloud Armor deny or rate-limit action" \
+	'.securityPolicy.rules[0].action = "allow"'
 run_case "not-internet-facing" fail "target is not confirmed as internet-facing" \
 	'.target.internetFacing = false | .target.id = "synthetic-private-backend"'
-run_case "preview-only-waf" fail "no active, non-preview preconfigured WAF rule" \
+run_case "preview-only-waf" fail "no active, non-preview Cloud Armor deny or rate-limit action" \
 	'.securityPolicy.rules[0].preview = true'
 run_case "request-logging-disabled" fail "request logging is not enabled" \
 	'.backendService.logConfig.enable = false'

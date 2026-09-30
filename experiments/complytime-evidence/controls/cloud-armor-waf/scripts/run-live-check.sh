@@ -209,11 +209,10 @@ jq -cn \
 				$input.backendService.securityPolicy == $input.securityPolicy.selfLink
 				and $input.backendService.securityPolicy != ""
 			),
-			active_enforcing_preconfigured_waf_rule_count: [
+			active_cloud_armor_action_count: [
 				$input.securityPolicy.rules[]?
 				| select((.preview // false) == false)
 				| select((.action | test("^(deny\\(|throttle$|rate_based_ban$)")))
-				| select((.match.expr.expression // "") | contains("evaluatePreconfiguredWaf("))
 			] | length,
 			request_logging_enabled: $input.backendService.logConfig.enable,
 			request_log_sample_rate: $input.backendService.logConfig.sampleRate

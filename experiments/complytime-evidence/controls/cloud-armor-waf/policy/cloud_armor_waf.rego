@@ -26,8 +26,8 @@ deny contains msg if {
 }
 
 deny contains msg if {
-	not active_preconfigured_waf_rule
-	msg := "no active, non-preview preconfigured WAF rule with an enforcement action was found"
+	not active_cloud_armor_action
+	msg := "no active, non-preview Cloud Armor deny or rate-limit action was found"
 }
 
 attached_security_policy if {
@@ -47,15 +47,11 @@ backend_service_requests_sampled if {
 	sample_rate <= 1
 }
 
-active_preconfigured_waf_rule if {
+active_cloud_armor_action if {
 	some i
 	rule := input.securityPolicy.rules[i]
 	object.get(rule, "preview", false) == false
 	enforcing_action(rule.action)
-	match := object.get(rule, "match", {})
-	expr := object.get(match, "expr", {})
-	expression := object.get(expr, "expression", "")
-	contains(expression, "evaluatePreconfiguredWaf(")
 }
 
 enforcing_action(action) if {
