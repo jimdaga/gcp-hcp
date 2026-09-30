@@ -2,7 +2,6 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
-control_dir="$(cd -- "$script_dir/.." && pwd)"
 project_id=""
 backend_service=""
 security_policy=""
@@ -56,15 +55,21 @@ if [[ -z "$project_id" || -z "$backend_service" || -z "$security_policy" ]]; the
 	exit 2
 fi
 
-for tool in gcloud jq conftest; do
+for tool in gcloud jq; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required command not found: %s\n' "$tool" >&2
 		exit 2
 	fi
 done
 
+scan_runner="$script_dir/run-complytime-scan.sh"
+if [[ ! -x "$scan_runner" ]]; then
+	printf 'the shared ComplyTime scan runner is missing from the WAF control scripts directory\n' >&2
+	exit 2
+fi
+
 tmp_dir="$(mktemp -d)"
-trap 'rm -f "$tmp_dir/backend-service.json" "$tmp_dir/security-policy.json" "$tmp_dir/assessment.json" "$tmp_dir/conftest.json" "$tmp_dir/url-maps.jsonl" "$tmp_dir/proxies.jsonl" "$tmp_dir/forwarding-rules.jsonl" "$tmp_dir/url-map.json" "$tmp_dir/proxy-list.json" "$tmp_dir/forwarding-rules.json" "$tmp_dir/frontend-evidence.json"; rmdir "$tmp_dir"' EXIT
+trap 'rm -f "$tmp_dir/backend-service.json" "$tmp_dir/security-policy.json" "$tmp_dir/assessment.json" "$tmp_dir/complytime-output.txt" "$tmp_dir/url-maps.jsonl" "$tmp_dir/proxies.jsonl" "$tmp_dir/forwarding-rules.jsonl" "$tmp_dir/url-map.json" "$tmp_dir/proxy-list.json" "$tmp_dir/forwarding-rules.json" "$tmp_dir/frontend-evidence.json"; rmdir "$tmp_dir"' EXIT
 
 if ! gcloud compute backend-services describe "$backend_service" \
 	--global \
@@ -168,25 +173,19 @@ if ! jq -n \
 	exit 2
 fi
 
-set +e
-conftest test "$tmp_dir/assessment.json" \
-	--policy "$control_dir/policy" \
-	--namespace cloudarmor.waf \
-	--output json >"$tmp_dir/conftest.json" 2>&1
-conftest_status=$?
-set -e
+if ! bash "$scan_runner" \
+	--input-file "$tmp_dir/assessment.json" \
+	--target-id "$backend_service" \
+	--expected-result Any >"$tmp_dir/complytime-output.txt" 2>&1; then
+	printf 'ComplyTime could not complete the WAF scan; inspect the ignored local .complytime run diagnostics\n' >&2
+	exit 2
+fi
 
-case "$conftest_status" in
-	0)
-		result=pass
-		reason=""
-		;;
-	1)
-		result=fail
-		reason="$(jq -er '[.[].failures[]?.msg] | unique | if length > 0 then join("; ") else error("expected policy failure message") end' "$tmp_dir/conftest.json")"
-		;;
+result="$(sed -n 's/^EvaluationLog requirement result: //p' "$tmp_dir/complytime-output.txt" | tail -n 1)"
+case "$result" in
+	Passed|Failed) ;;
 	*)
-		printf 'conftest exited unexpectedly with status %s; this is a runner error, not an assessment failure\n' "$conftest_status" >&2
+		printf 'ComplyTime completed without a recognized WAF EvaluationLog result; inspect the ignored local .complytime run diagnostics\n' >&2
 		exit 2
 		;;
 esac
@@ -194,13 +193,12 @@ esac
 jq -cn \
 	--arg requirement_id "EXAMPLE-WAF-POC-1" \
 	--arg result "$result" \
-	--arg reason "$reason" \
 	--slurpfile assessment "$tmp_dir/assessment.json" \
 	'($assessment[0]) as $input
 	| {
 		source: "live-gcloud",
 		requirement_id: $requirement_id,
-		result: ($result | ascii_upcase),
+		result: $result,
 		observations: {
 			load_balancing_scheme: $input.target.loadBalancingScheme,
 			internet_facing: $input.target.internetFacing,
@@ -216,11 +214,5 @@ jq -cn \
 			] | length,
 			request_logging_enabled: $input.backendService.logConfig.enable,
 			request_log_sample_rate: $input.backendService.logConfig.sampleRate
-		},
-		reason: (if $reason == "" then null else $reason end)
+		}
 	}'
-
-if [[ "$result" == fail ]]; then
-	printf 'assessment failed its policy checks (exit 1 is the expected policy-failure status)\n' >&2
-	exit 1
-fi

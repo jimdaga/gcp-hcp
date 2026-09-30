@@ -7,8 +7,9 @@ GO_CACHE := $(CONTROL_DIR)/.complytime/go-cache
 COMPLYCTL_VERSION := v1.0.0
 OPA_PROVIDER_VERSION := v0.2.1
 COMPLYPACK_VERSION := v0.0.8
+export PROJECT BACKEND_SERVICE SECURITY_POLICY
 
-.PHONY: install-tools test scan-fixture clean
+.PHONY: install-tools test scan-fixture scan-live clean
 
 install-tools:
 	@mkdir -p "$(BIN_DIR)" "$(GO_PATH)" "$(GO_CACHE)"
@@ -23,12 +24,19 @@ install-tools:
 
 test:
 	@bash tests/test-evaluation-log.sh
+	@bash tests/test-live-collector.sh
 	@bash tests/test-normalizer.sh
 	@bash tests/run-fixtures.sh
 	@bash tests/test-complytime-fixture.sh
 
 scan-fixture:
 	@bash scripts/run-fixture-scans.sh
+
+scan-live:
+	@bash scripts/run-live-check.sh \
+		--project "$$PROJECT" \
+		--backend-service "$$BACKEND_SERVICE" \
+		--security-policy "$$SECURITY_POLICY"
 
 clean:
 	@rm -rf "$(BIN_DIR)" "$(CONTROL_DIR)/.complytime"
