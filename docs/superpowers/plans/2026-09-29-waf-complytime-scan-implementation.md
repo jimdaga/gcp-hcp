@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing normalized assessment envelope and Rego policy. A shared local runner will use `complypack` to push the policy CompliPack and ORAS to push the Gemara policy layers into a temporary OCI Distribution registry bound to loopback. It will create an isolated ComplyTime workspace, fetch both artifacts, generate the OPA-provider config, scan an explicit local input directory, and validate the resulting native EvaluationLog. Fixture and live commands differ only in input collection. No evidence upload or external artifact publishing.
 
-**Tech Stack:** Bash, `jq`, `yq`, read-only `gcloud`, `complyctl` v1.0.0-rc.0, OPA provider v0.1.0, CompliPack v0.1.0, ORAS v1.3.2, Podman, OCI Distribution registry.
+**Tech Stack:** Bash, `jq`, `yq`, read-only `gcloud`, `complyctl` v1.0.0, OPA provider v0.2.1, CompliPack v0.0.8 (the CompliPack API version required by complyctl v1.0.0), ORAS v1.3.2, Podman, `docker.io/library/registry:2.8.3` OCI Distribution registry.
 
 ## Global Constraints
 
@@ -18,7 +18,7 @@
 - A policy `Failed` result is a valid scan result; inspect EvaluationLog content rather than treating `complyctl scan` exit status alone as the assessment result.
 - Use Test-Driven Development: add a failing check for each behavior before implementing it; observe RED, then GREEN.
 - Keep generated workspaces, provider binaries, scan logs, registry state, and live inputs ignored/local only.
-- Pin tool versions. The pinned complyctl module requires Go 1.25.11; allow Go's documented toolchain selection or use a newer installed Go.
+- Pin tool versions. The pinned provider module requires Go 1.26.7; allow Go's documented toolchain selection or use a newer installed Go.
 
 ## Review Focus
 
@@ -48,6 +48,7 @@
 **Files:**
 - Create: `experiments/complytime-evidence/controls/cloud-armor-waf/Makefile`
 - Create: `experiments/complytime-evidence/controls/cloud-armor-waf/scripts/run-complytime-scan.sh`
+- Create: `experiments/complytime-evidence/controls/cloud-armor-waf/scripts/run-fixture-scans.sh`
 - Create: `experiments/complytime-evidence/controls/cloud-armor-waf/tests/test-complytime-fixture.sh`
 - Modify: `.gitignore`
 
@@ -55,10 +56,10 @@
 
 1. Write an integration test invoking the documented `make scan-fixture` path for the existing passing baseline and one temporary derived failing case. **Expected:** it fails early with a concise prerequisite/missing-entry-point error before any registry or artifact writes.
 2. Verify RED by running `make scan-fixture` before implementation.
-3. Add the shared runner: start the pinned local registry container on an OS-selected loopback port, poll its `/v2/` endpoint, package the current `policy/` directory with CompliPack, push all three Gemara YAML layers with ORAS and their official media types, then run `complyctl get`, `generate`, and `scan` from an isolated workspace.
+3. Add the shared runner: start the pinned `docker.io/library/registry:2.8.3` container on an OS-selected loopback port, poll its `/v2/` endpoint, package the current `policy/` directory with CompliPack, push all three Gemara YAML layers with ORAS and their official media types, then run `complyctl get`, `generate`, and `scan` from an isolated workspace.
 4. Start the registry bound only to `127.0.0.1`; name it uniquely and stop/remove only the container started by this runner in traps. If Podman is unavailable or its configured machine is stopped, return a safe actionable instruction without initializing/reconfiguring Podman.
 5. Preserve local EvaluationLogs and scan workspace below the control's ignored `.complytime/` directory so the user can inspect them. Keep target/live input files temporary.
-6. Add `make install-tools`, `make test`, `make scan-fixture`, and `make clean`; installation writes pinned binaries/caches only below this control directory and permits Go 1.25.11 toolchain auto-download.
+6. Add `make install-tools`, `make test`, `make scan-fixture`, and `make clean`; installation writes pinned binaries/caches only below this control directory and permits Go 1.26.7 toolchain auto-download.
 7. Add narrowly scoped `.gitignore` entries for `bin/`, `.complytime/`, and generated files in this control directory.
 8. Run `make scan-fixture`; **Expected:** both native EvaluationLogs exist and the helper reports `Passed` for the baseline and `Failed` for the derived case. Then run `make test`; **Expected:** existing and new test suites all pass.
 9. Commit: `feat: run WAF fixtures through ComplyTime`.
