@@ -1,6 +1,6 @@
 # Cloud Armor WAF ComplyTime Scan Design
 
-Status: Proposed for review. The user approved a local-only OCI registry approach on 2026-09-29; implementation details are still subject to review.
+Status: Approved for implementation on 2026-09-29. Scope remains local-only through native EvaluationLog generation; no S3 upload or external OCI publication.
 
 ## Goal
 
