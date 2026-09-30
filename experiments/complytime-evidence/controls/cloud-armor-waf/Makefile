@@ -1,9 +1,9 @@
 SHELL := /bin/bash
 
-CONTROL_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-BIN_DIR := $(CONTROL_DIR)/bin
-GO_PATH := $(CONTROL_DIR)/.complytime/gopath
-GO_CACHE := $(CONTROL_DIR)/.complytime/go-cache
+override CONTROL_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+override BIN_DIR := $(CONTROL_DIR)/bin
+override GO_PATH := $(CONTROL_DIR)/.complytime/gopath
+override GO_CACHE := $(CONTROL_DIR)/.complytime/go-cache
 COMPLYCTL_VERSION := v1.0.0
 OPA_PROVIDER_VERSION := v0.2.1
 COMPLYPACK_VERSION := v0.0.8
@@ -23,6 +23,7 @@ install-tools:
 	@printf 'Installed pinned complyctl, OPA provider, and CompliPack under %s\n' "$(BIN_DIR)"
 
 test:
+	@bash tests/test-clean-scope.sh
 	@bash tests/test-evaluation-log.sh
 	@bash tests/test-live-collector.sh
 	@bash tests/test-normalizer.sh

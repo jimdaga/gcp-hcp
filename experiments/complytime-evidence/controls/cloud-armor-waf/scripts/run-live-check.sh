@@ -75,7 +75,7 @@ if ! gcloud compute backend-services describe "$backend_service" \
 	--global \
 	--project="$project_id" \
 	--format=json \
-	--quiet >"$tmp_dir/backend-service.json"; then
+	--quiet >"$tmp_dir/backend-service.json" 2>/dev/null; then
 	printf 'could not read the named global backend service; check gcloud login, project access, and resource name\n' >&2
 	exit 2
 fi
@@ -84,7 +84,7 @@ if ! gcloud compute security-policies describe "$security_policy" \
 	--global \
 	--project="$project_id" \
 	--format=json \
-	--quiet >"$tmp_dir/security-policy.json"; then
+	--quiet >"$tmp_dir/security-policy.json" 2>/dev/null; then
 	printf 'could not read the named global Cloud Armor policy; check project access and resource name\n' >&2
 	exit 2
 fi
@@ -101,7 +101,7 @@ while IFS= read -r map_ref; do
 		--global \
 		--project="$project_id" \
 		--format=json \
-		--quiet >"$tmp_dir/url-map.json"; then
+		--quiet >"$tmp_dir/url-map.json" 2>/dev/null; then
 		printf 'could not read a URL map associated with the named backend service\n' >&2
 		exit 2
 	fi
@@ -121,7 +121,7 @@ while IFS= read -r map_ref; do
 			--global \
 			--project="$project_id" \
 			--filter="urlMap=$map_self" \
-			--format=json >"$tmp_dir/proxy-list.json"; then
+			--format=json >"$tmp_dir/proxy-list.json" 2>/dev/null; then
 			printf 'could not list global HTTP(S) proxies for an associated URL map\n' >&2
 			exit 2
 		fi
@@ -138,7 +138,7 @@ while IFS= read -r map_ref; do
 				--global \
 				--project="$project_id" \
 				--filter="target=$proxy_self" \
-				--format=json >"$tmp_dir/forwarding-rules.json"; then
+				--format=json >"$tmp_dir/forwarding-rules.json" 2>/dev/null; then
 				printf 'could not list global forwarding rules for an associated HTTP(S) proxy\n' >&2
 				exit 2
 			fi

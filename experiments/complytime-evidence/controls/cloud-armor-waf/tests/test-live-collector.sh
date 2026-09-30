@@ -41,6 +41,10 @@ cat >"$fake_bin/gcloud" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$TEST_GCLOUD_LOG"
+if [[ -n "${TEST_GCLOUD_FAIL_MATCH:-}" && "$*" == *"$TEST_GCLOUD_FAIL_MATCH"* ]]; then
+  printf 'permission denied for %s in %s\n' "$TEST_BACKEND_MARKER" "$TEST_PROJECT_MARKER" >&2
+  exit 42
+fi
 case "$*" in
   *"backend-services describe"*) cat "$TEST_RESPONSE_DIR/backend-service.json" ;;
   *"security-policies describe"*) cat "$TEST_RESPONSE_DIR/security-policy.json" ;;
@@ -89,8 +93,10 @@ run_case() {
   set +e
   PATH="$fake_bin:$PATH" \
     TEST_CAPTURE_DIR="$capture" \
+    TEST_BACKEND_MARKER="$backend_marker" \
     TEST_EXPECTED_TARGET="$backend_marker" \
     TEST_GCLOUD_LOG="$capture/gcloud-commands.log" \
+    TEST_PROJECT_MARKER="$project_marker" \
     TEST_RESPONSE_DIR="$responses" \
     TEST_SCAN_RESULT="$result" \
     TEST_SCAN_STATUS="$expected_status" \
@@ -139,9 +145,65 @@ run_case() {
   }
 }
 
+run_collection_error_case() {
+  local failure_match="$1" expected_message="$2"
+  local output="$tmp_root/output-gcloud-error.txt" status
+  set +e
+  PATH="$fake_bin:$PATH" \
+    TEST_BACKEND_MARKER="$backend_marker" \
+    TEST_CAPTURE_DIR="$capture" \
+    TEST_EXPECTED_TARGET="$backend_marker" \
+    TEST_GCLOUD_LOG="$capture/gcloud-commands.log" \
+    TEST_GCLOUD_FAIL_MATCH="$failure_match" \
+    TEST_PROJECT_MARKER="$project_marker" \
+    TEST_RESPONSE_DIR="$responses" \
+      make -s -C "$test_control" scan-live \
+        PROJECT="$project_marker" \
+        BACKEND_SERVICE="$backend_marker" \
+        SECURITY_POLICY="$policy_marker" >"$output" 2>&1
+  status=$?
+  set -e
+
+  [[ "$status" == 2 ]] || {
+    printf 'gcloud collection failure should be an operational exit 2, got %s\n' "$status" >&2
+    cat "$output" >&2
+    return 1
+  }
+  for marker in "$project_marker" "$backend_marker" "$policy_marker" "$map_marker"; do
+    if grep -Fq "$marker" "$output"; then
+      printf 'live collector leaked a GCP identifier from gcloud stderr: %s\n' "$marker" >&2
+      cat "$output" >&2
+      return 1
+    fi
+  done
+  grep -Fq "$expected_message" "$output" || {
+    printf 'live collector did not keep the expected generic gcloud error message: %s\n' "$expected_message" >&2
+    cat "$output" >&2
+    return 1
+  }
+}
+
 run_case Passed 0
 run_case Failed 0
 run_case Failed 2
+run_collection_error_case \
+  'backend-services describe' \
+  'could not read the named global backend service'
+run_collection_error_case \
+  'security-policies describe' \
+  'could not read the named global Cloud Armor policy'
+run_collection_error_case \
+  'url-maps describe' \
+  'could not read a URL map associated with the named backend service'
+run_collection_error_case \
+  'target-http-proxies list' \
+  'could not list global HTTP(S) proxies for an associated URL map'
+run_collection_error_case \
+  'target-https-proxies list' \
+  'could not list global HTTP(S) proxies for an associated URL map'
+run_collection_error_case \
+  'forwarding-rules list' \
+  'could not list global forwarding rules for an associated HTTP(S) proxy'
 
 for command in \
   'compute backend-services describe' \

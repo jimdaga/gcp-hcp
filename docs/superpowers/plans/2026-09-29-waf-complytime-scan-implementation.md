@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only in `/Users/jdagosti/git/jimdaga/gcp-hcp/.worktrees/gcp-1258-waf-prototype`.
+- Work only under `experiments/complytime-evidence/controls/cloud-armor-waf` in the `gcp-hcp` repository worktree attached to this task.
 - Bind the temporary registry to `127.0.0.1`; never publish OCI artifacts to an external registry.
 - Do not configure S3, AWS, Sumo Logic, Hyperproof, or any evidence upload.
 - Do not write live project IDs, resource names, credentials, raw GCP responses, or live EvaluationLogs into tracked files or public command output.
