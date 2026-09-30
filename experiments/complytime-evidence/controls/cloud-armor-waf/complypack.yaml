@@ -16,4 +16,4 @@ policies:
   dir: policy/
 
 fixtures:
-  dir: fixtures/
+  dir: tests/fixtures/

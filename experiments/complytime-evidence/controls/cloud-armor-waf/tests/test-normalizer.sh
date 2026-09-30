@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
-normalizer="$script_dir/normalize-gcloud-snapshot.jq"
+tests_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+control_dir="$(cd -- "$tests_dir/.." && pwd)"
+normalizer="$control_dir/scripts/normalize-gcloud-snapshot.jq"
 
 backend_json='{"name":"synthetic-backend","loadBalancingScheme":"EXTERNAL_MANAGED","securityPolicy":"https://compute.example/projects/synthetic/global/securityPolicies/sample","usedBy":[{"reference":"https://compute.example/projects/synthetic/global/urlMaps/synthetic-map"}],"logConfig":{"enable":true,"sampleRate":1.0}}'
 policy_json='[{"name":"sample","selfLink":"https://compute.example/projects/synthetic/global/securityPolicies/sample","rules":[{"priority":1000,"action":"deny(403)","preview":false,"match":{"expr":{"expression":"evaluatePreconfiguredWaf('\''xss-v33-stable'\'')"}}},{"priority":2147483647,"action":"allow","match":{"versionedExpr":"SRC_IPS_V1"}}]}]'
@@ -60,4 +61,4 @@ unrelated_map_assessment="$(
 )"
 jq -e '.target.internetFacing == false' <<<"$unrelated_map_assessment" >/dev/null
 
-printf 'live normalizer tests passed (synthetic input only)\n'
+printf 'gcloud normalizer tests passed (synthetic input only)\n'
