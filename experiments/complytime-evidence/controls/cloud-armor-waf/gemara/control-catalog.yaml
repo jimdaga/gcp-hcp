@@ -1,0 +1,31 @@
+title: Cloud Armor WAF Example Controls
+metadata:
+  id: cloud-armor-waf-example-controls
+  type: ControlCatalog
+  gemara-version: v1.0.0
+  version: "0.1.0"
+  description: Example-only control catalog for a Cloud Armor WAF prototype.
+  author:
+    id: complytime-waf-prototype
+    name: ComplyTime WAF Prototype
+    type: Software Assisted
+  applicability-groups:
+    - id: gcp-external-application-load-balancer
+      title: GCP external HTTP(S) application load balancers
+      description: Global backends referenced by a URL map served through a global HTTP(S) proxy and external global forwarding rule.
+groups:
+  - id: web-application-firewall
+    title: Web application firewall
+    description: Controls for detecting and preventing web-based attacks.
+controls:
+  - id: example-cloud-armor-waf
+    title: Cloud Armor WAF enforcement and request logging
+    objective: Verify a selected backend is configured behind an external global HTTP(S) application load balancer, is protected by an enforcing Cloud Armor WAF policy, and has request logging enabled.
+    group: web-application-firewall
+    state: Draft
+    assessment-requirements:
+      - id: EXAMPLE-WAF-POC-1
+        state: Draft
+        text: A selected global backend service referenced by a URL map served through a global HTTP(S) proxy and an external global forwarding rule MUST have a matching attached Cloud Armor security policy with an active enforcing preconfigured WAF rule, and backend request logging MUST be enabled with a sample rate greater than zero.
+        applicability:
+          - gcp-external-application-load-balancer
