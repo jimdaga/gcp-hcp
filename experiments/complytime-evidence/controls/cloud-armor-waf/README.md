@@ -1,6 +1,6 @@
 # Cloud Armor WAF example
 
-This directory contains a learning prototype with example-only Gemara Layer 1 WAF guidance, a Layer 2 Cloud Armor configuration check, and a Layer 3 policy implemented in OPA/Rego and packaged by CompliPack. It supports synthetic fixture tests and an explicitly invoked, read-only live check of global GCP resources. It is not a deployment artifact, approved compliance control, or audit evidence.
+This directory contains a learning prototype with example-only Gemara Layer 1 WAF guidance, a Layer 2 Cloud Armor configuration check, and a Layer 3 policy implemented in OPA/Rego and packaged by CompliPack. Synthetic fixture scans and explicitly invoked, read-only live scans use the same ComplyTime path and produce a native Layer 5 `EvaluationLog` locally. This is not a deployment artifact, approved compliance control, or delivered audit evidence.
 
 ## What the example checks
 
@@ -27,9 +27,9 @@ This is only a narrow check against one selected backend, not an assessment of e
 
 ## How this maps to the walkthrough
 
-The content now has the intended Gemara layers: `guidance-catalog.yaml` is non-normative example Layer 1 guidance, `control-catalog.yaml` is a narrow Layer 2 assessment requirement linked to that guideline, and `policy.yaml` is the Layer 3 evaluation plan naming OPA. The installed OPA engine is exercised locally through Conftest for this learning harness.
+The content uses the intended Gemara layers: `guidance-catalog.yaml` is non-normative example Layer 1 guidance, `control-catalog.yaml` is a narrow Layer 2 assessment requirement linked to that guideline, and `policy.yaml` is the Layer 3 evaluation plan naming OPA. `make scan-fixture` packages the Gemara layers and OPA policy as local OCI artifacts, runs `complyctl get`, `generate`, and `scan` with the OPA provider, then leaves the native Layer 5 `EvaluationLog` in the local workspace. The registry is temporary and bound only to loopback.
 
-The automation path is not end-to-end yet. This harness does not pack and push an OCI bundle, use `complyctl get`/`generate`/`scan` or the ComplyTime OPA provider, emit a native Layer 5 `EvaluationLog`, or store evidence in an approved evidence store. It also does not test alert delivery or rule freshness. Those are explicit follow-on integration and control-coverage gaps, not behavior implied by a passing fixture or live run.
+The local scan path now works through EvaluationLog generation, but evidence delivery is intentionally out of scope: there is no S3/Evidence Locker upload, Hyperproof API connection, Sumo Logic forwarding, WIF setup, or production pipeline automation. The provider is still marked for testing purposes by its maintainers. This remains a narrow prototype; a passing run does not prove alert delivery, rule freshness, detection of a particular attack, or full WAF-control compliance.
 
 ## Files
 
@@ -42,51 +42,72 @@ The Gemara artifacts are under `gemara/`. The live gcloud collector and its jq n
 - `tests/fixtures/active-preconfigured-waf.json`: the synthetic passing baseline.
 - `tests/run-fixtures.sh`: derives and tests pass/fail scenarios in temporary files, then emits JSON Lines with each scenario's outcome, target ID, and input SHA-256.
 - `tests/test-normalizer.sh`: tests the gcloud-response normalizer using synthetic input.
+- `scripts/run-complytime-scan.sh`: shared local OCI → ComplyTime → EvaluationLog runner used by fixture and live scans.
+- `scripts/run-fixture-scans.sh`: runs one synthetic pass and one derived synthetic failure through the shared runner.
+- `tests/test-complytime-fixture.sh` and `tests/test-live-collector.sh`: exercise the native fixture path and the read-only live collector contract.
+- `Makefile`: short entry points so the tool and scan commands are easy to repeat.
 
 The Gemara artifacts are split by layer: `gemara/guidance-catalog.yaml` is the example Layer 1 guidance, `gemara/control-catalog.yaml` is the Layer 2 control, and `gemara/policy.yaml` is the Layer 3 evaluation policy. `complypack.yaml` includes all three documents.
 
-## Local validation
+## Install and run locally
 
-Run these commands from this directory so the local Gemara and CUE file references resolve correctly.
+Run the commands from this directory so the local Gemara and CUE file references resolve correctly.
 
-Inspect the assessment requirement linked to the Gemara policy with the installed CompliPack CLI. This command succeeded with the version used for this prototype; CLI options may differ in other releases:
+### Prerequisites
 
-    complypack requirements --config complypack.yaml \
-      --catalog cloud-armor-waf-example-controls --format json
+- `make`, Bash, `git`, `curl`, `jq`, `yq`, `conftest`, `oras`, `shasum`, and Podman.
+- Go 1.26.7 or newer. `make install-tools` sets `GOTOOLCHAIN=auto`, so Go can download a compatible toolchain when the system Go is older (network access is needed the first time).
+- ORAS 1.3.2 on `PATH` (`oras version` should report version `1.3.2`; build metadata such as `+Homebrew` may follow it). This prototype does not install ORAS for you.
+- `gcloud` and an identity with read access to the selected resources are needed only for `make scan-live`.
 
-The following commands validate the pack and policy, then run only synthetic tests:
+Install the ComplyTime tools into this control's ignored `bin/` directory:
 
 ```sh
-complypack config validate --scope pack
-complypack validate-policy policy/cloud_armor_waf.rego \
-  --platform cloud-armor-assessment \
-  --schema cloud-armor-assessment=file://./schema/cloud-armor-assessment.cue
-bash tests/test-normalizer.sh
-bash tests/run-fixtures.sh
+make install-tools
 ```
 
-The tests require `jq`; the fixture runner also requires `conftest` and `shasum`. Its JSONL records are example output, not a ComplyTime `EvaluationLog`.
+The installer pins `complyctl v1.0.0`, OPA provider `v0.2.1`, and CompliPack `v0.0.8`; these are installed locally and their Go build caches stay under ignored `.complytime/`. CompliPack `v0.0.8` is intentional: it is the API version required by `complyctl v1.0.0`; CompliPack `v0.1.0` emits an incompatible provenance shape. The OPA provider is still testing-only, not a production-readiness signal.
+
+### Repeatable commands
+
+```sh
+# Run unit/normalizer tests plus local ComplyTime pass and fail scans.
+make test
+
+# Run just the two native ComplyTime fixture scans.
+make scan-fixture
+
+# Read-only scan of explicitly named global GCP resources.
+make scan-live \
+  PROJECT=YOUR_PROJECT_ID \
+  BACKEND_SERVICE=YOUR_BACKEND_SERVICE \
+  SECURITY_POLICY=YOUR_CLOUD_ARMOR_POLICY
+```
+
+Fixture inputs and fake-gcloud responses are synthetic. `make test` does not call the live GCP project; its live-collector test substitutes fake `gcloud` and a scan-runner stub. The actual `make scan-live` command uses only read-only `gcloud describe` and filtered `list` calls, follows the backend's URL-map → HTTP(S) proxy → forwarding-rule chain, and sends the normalized temporary snapshot through the same shared ComplyTime runner. Check the active gcloud account before a live run with `gcloud auth list --filter=status:ACTIVE`. If Podman is unavailable, the runner prints instructions to start the existing machine using `podman machine start`; it never initializes or reconfigures Podman.
+
+A completed assessment returns exit status 0 whether its native result is `Passed` or `Failed`. A failed requirement is an assessment outcome, not a runner error. Collection, provider, workspace, or EvaluationLog errors return status 2. A fixture whose actual result differs from its expected result fails the test.
+
+### Local outputs and privacy
+
+- `bin/` contains the locally installed pinned tools.
+- `.complytime/gopath/` and `.complytime/go-cache/` contain Go modules, toolchains, and build cache used by `make install-tools`.
+- `.complytime/runs/scan.*` contains local runner diagnostics, generated ComplyTime workspace/configuration, and EvaluationLogs at `<run>/.complytime/scan/evaluation-log-*.yaml`.
+- The temporary loopback registry is stopped and removed after each run. Live raw GCP responses and the normalized input are created in a temporary directory and removed on exit.
+
+`bin/` and `.complytime/` are ignored by Git. EvaluationLogs from live scans can contain resource identifiers; keep them local and do not add them to a commit. To list local reports, run `find .complytime/runs -type f -path '*/.complytime/scan/evaluation-log-*.yaml' -print`. `make clean` removes only the control's ignored tool binaries and generated `.complytime/` data.
+
+The fast policy-only suites remain directly runnable as `bash tests/run-fixtures.sh` and `bash tests/test-normalizer.sh`; they use synthetic fixtures and do not replace the native ComplyTime scan.
 
 ## Why this first version uses Bash
 
-The Bash script is a small learning harness around real `gcloud` API reads; it does not manufacture the live assessment data. `jq` reshapes those API responses into the prototype input, and the same Rego policy is then used for fixture and live runs. This keeps the first pass easy to inspect without introducing a Go client or a ComplyTime provider before the evidence contract is settled. It is prototype glue, not a decision that production automation should be Bash. Once the check and evidence shape are agreed, a Go collector/provider or native `complyctl` integration can replace the wrapper.
+The Bash scripts are small learning glue around real `gcloud` API reads and the native ComplyTime CLI; they do not manufacture live assessment data. `jq` reshapes the API responses, and the same Gemara policy, CompliPack, and provider path is used for fixture and live input. The wrapper is not a decision that production collection should be Bash. This local experiment does not define a scheduled automation pipeline; the repository's [pipeline automation decision](../../../../design-decisions/automation/pipeline-automation-tooling.md) selects Tekton for platform workflows.
 
-## Live check and Gemara validation
+## Scope boundaries
 
-The live command requires gcloud, jq, and conftest and uses the currently active gcloud identity. Check which account is active with `gcloud auth list --filter=status:ACTIVE`; the identity needs read access to the named backend service and policy and to the associated global URL map, HTTP(S) proxies, and forwarding rules. It invokes only read-only `describe` and filtered `list` operations; replace the placeholders with your project and resource names when you run it. Those values are not stored in these files. The collector also reads the URL map, matching global HTTP(S) proxies, and forwarding rules to verify the external frontend chain. Keep this live check local for now: although successful output omits project/resource names, a `gcloud` error message may include them, so do not publish captured stderr or run it in a public CI job.
+The compact live summary reports the native ComplyTime result and configuration observations, without echoing project or resource names. Because cloud CLI error messages may include identifiers, keep the run local and do not publish captured stderr or local EvaluationLogs. The scan is read-only, but it uses the currently active gcloud identity rather than WIF.
 
-    bash scripts/run-live-check.sh \
-      --project YOUR_PROJECT_ID \
-      --backend-service YOUR_BACKEND_SERVICE \
-      --security-policy YOUR_CLOUD_ARMOR_POLICY
-
-The compact JSON output shows the backend load-balancing scheme, whether an external HTTP(S) frontend chain was found, the protocols and schemes in that chain, whether the policy is attached, the count of active non-preview Cloud Armor deny/rate-limit actions, and request-log settings. A policy failure exits with status 1; a gcloud, normalization, or Conftest runner error exits with status 2. The output is not yet a native Gemara EvaluationLog because complyctl and a provider are not wired into this prototype.
-
-If CUE is installed, validate the Gemara documents against the published Gemara schemas:
-
-    cue vet -c -d '#ControlCatalog' github.com/gemaraproj/gemara@v1.5.0 gemara/control-catalog.yaml
-    cue vet -c -d '#GuidanceCatalog' github.com/gemaraproj/gemara@v1.5.0 gemara/guidance-catalog.yaml
-    cue vet -c -d '#Policy' github.com/gemaraproj/gemara@v1.5.0 gemara/policy.yaml
+The EvaluationLog is local-only: there is no S3/Evidence Locker upload, Hyperproof integration, Sumo Logic forwarding, WIF setup, or auditor access in this prototype. A live result is evidence of this one configuration snapshot only. It does not prove that Cloud Armor blocks a particular attack, that alert delivery works, that logs reach a central destination, or that rules are kept current.
 
 ## References
 
@@ -95,6 +116,9 @@ If CUE is installed, validate the Gemara documents against the published Gemara 
 - [Cloud Armor per-request logging](https://docs.cloud.google.com/armor/docs/request-logging)
 - [Global external Application Load Balancer logging and monitoring](https://docs.cloud.google.com/load-balancing/docs/https/https-logging-monitoring)
 - [ComplyPack README and CLI examples](https://github.com/complytime/complypack)
+- [ComplyPack v0.0.8 (pinned for complyctl v1.0.0)](https://github.com/complytime/complypack/tree/v0.0.8)
+- [complyctl v1.0.0](https://github.com/complytime/complyctl/tree/v1.0.0)
+- [OPA provider v0.2.1 README](https://github.com/complytime/complytime-providers/blob/v0.2.1/cmd/opa-provider/README.md)
 - [ComplyPack example configuration](https://github.com/complytime/complypack/blob/main/complypack.example.yaml)
 - [Gemara Control Catalog schema](https://gemara.openssf.org/schema/controlcatalog.html)
 - [Gemara Guidance Catalog schema](https://gemara.openssf.org/schema/guidancecatalog.html)
